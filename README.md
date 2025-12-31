@@ -20,6 +20,7 @@ docker run --rm -it \
   --tmpfs /tmp:rw,noexec,nosuid,nodev \
   --tmpfs /home/codex:rw,noexec,nosuid,nodev,size=512m \
   -v "$(pwd)":/workspace:rw \
+  -v "$HOME/.gitconfig":/home/codex/.gitconfig:ro \
   -v "$HOME/.codex":/home/codex/.codex:rw \
   -e CODEX_HOME=/home/codex/.codex \
   codex-cli:local \
@@ -41,6 +42,7 @@ cxhere() {
     --tmpfs /tmp:rw,noexec,nosuid,nodev \
     --tmpfs /home/codex:rw,noexec,nosuid,nodev,size=512m \
     -v "$(pwd)":/workspace:rw \
+    -v "$HOME/.gitconfig":/home/codex/.gitconfig:ro \
     -v "$HOME/.codex":/home/codex/.codex:rw \
     -e CODEX_HOME=/home/codex/.codex \
     codex-cli:local \

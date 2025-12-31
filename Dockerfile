@@ -15,4 +15,5 @@ RUN useradd -m -u 10001 -s /bin/bash codex
 USER codex
 
 WORKDIR /workspace
+ENV GIT_CONFIG_GLOBAL=/home/codex/.gitconfig
 ENTRYPOINT ["codex"]
