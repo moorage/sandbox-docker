@@ -104,6 +104,28 @@ cxhere() {
     fi
   fi
 
+  echo "worktree directory: $worktree_dir"
+  if command -v code >/dev/null 2>&1; then
+    echo "open in VS Code: code \"$worktree_dir\""
+  fi
+  if command -v cursor >/dev/null 2>&1; then
+    echo "open in Cursor: cursor \"$worktree_dir\""
+  fi
+  if command -v codium >/dev/null 2>&1; then
+    echo "open in VSCodium: codium \"$worktree_dir\""
+  fi
+  if command -v open >/dev/null 2>&1; then
+    echo "open in Finder: open \"$worktree_dir\""
+  fi
+  if command -v xdg-open >/dev/null 2>&1; then
+    echo "open in file manager: xdg-open \"$worktree_dir\""
+  fi
+  if command -v wslpath >/dev/null 2>&1 && command -v explorer.exe >/dev/null 2>&1; then
+    echo "open in Explorer (WSL): explorer.exe \"$(wslpath -w "$worktree_dir")\""
+  elif command -v explorer.exe >/dev/null 2>&1; then
+    echo "open in Explorer: explorer.exe \"$(pwd -W 2>/dev/null)\""
+  fi
+
   docker run --rm -it \
     --init \
     --cap-drop=ALL \
