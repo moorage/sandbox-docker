@@ -1,5 +1,9 @@
 # sandbox-docker
 
+- PLANS.md and ExecPlans comes from <https://cookbook.openai.com/articles/codex_exec_plans>
+- prompting guide comes from <https://cookbook.openai.com/examples/gpt-5/gpt-5-1-codex-max_prompting_guide>
+
+
 ## Building the Docker Image
 
 To build the Docker image, run the following command in the terminal:
@@ -127,7 +131,7 @@ cxhere() {
     -e CODEX_HOME=/home/codex/.codex \
     -w /workspace \
     codex-cli:local \
-    --full-auto --search
+    --full-auto --sandbox workspace-write --ask-for-approval on-failure --search
   )
 }
 
