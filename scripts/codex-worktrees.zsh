@@ -16,6 +16,7 @@ cxhere() {
   local -a env_sources
   local gitignore_path create_gitignore add_env_ignore
   local env_file_arg
+  local codex_config codex_config_dir add_workspace_trust
   repo_root="$(git rev-parse --show-toplevel)"
   branch_name="$1"
   worktree_slug="${branch_name//\//__}"
@@ -27,9 +28,64 @@ cxhere() {
   plans_path="$worktree_dir/.agent/PLANS.md"
   agents_url="https://raw.githubusercontent.com/moorage/sandbox-docker/refs/heads/main/AGENTS.example.global.md"
   agents_path="${CODEX_HOME:-$HOME/.codex}/AGENTS.md"
+  codex_config="${CODEX_HOME:-$HOME/.codex}/config.toml"
+  codex_config_dir="$(dirname "$codex_config")"
   env_file="$worktree_dir/.env.cx.local"
   gitignore_path="$worktree_dir/.gitignore"
   env_file_arg=()
+
+  codex_workspace_trust_present() {
+    [ -f "$codex_config" ] || return 1
+    awk '
+      BEGIN{in=0;ok=0}
+      /^\[/{in=0}
+      /^\[projects\."\/workspace"\]/{in=1}
+      in && /^[[:space:]]*trust_level[[:space:]]*=[[:space:]]*"trusted"[[:space:]]*$/{ok=1}
+      END{exit ok?0:1}
+    ' "$codex_config"
+  }
+
+  codex_ensure_workspace_trust() {
+    if codex_workspace_trust_present; then
+      return 0
+    fi
+
+    echo "codex config missing trusted /workspace entry: $codex_config" >&2
+    read -r "add_workspace_trust?Add it? [y/N] "
+    if [[ "$add_workspace_trust" != [yY]* ]]; then
+      return 0
+    fi
+
+    mkdir -p "$codex_config_dir"
+    if [ ! -f "$codex_config" ]; then
+      printf "%s\n" "[projects.\"/workspace\"]" "trust_level = \"trusted\"" > "$codex_config"
+      echo "created $codex_config with /workspace trust" >&2
+      return 0
+    fi
+
+    if rg -q '^\[projects\."\/workspace"\][[:space:]]*$' "$codex_config"; then
+      local tmp_config
+      tmp_config="$(mktemp)"
+      awk '
+        BEGIN{in=0;done=0}
+        /^\[projects\."\/workspace"\]/{print; in=1; next}
+        /^\[/{ if (in && !done){print "trust_level = \"trusted\""; done=1} in=0 }
+        {
+          if (in && $0 ~ /^[[:space:]]*trust_level[[:space:]]*=/) {
+            if (!done) {print "trust_level = \"trusted\""; done=1}
+            next
+          }
+          print
+        }
+        END{ if (in && !done) print "trust_level = \"trusted\"" }
+      ' "$codex_config" > "$tmp_config"
+      mv "$tmp_config" "$codex_config"
+      echo "updated $codex_config with /workspace trust" >&2
+    else
+      printf "\n%s\n%s\n" "[projects.\"/workspace\"]" "trust_level = \"trusted\"" >> "$codex_config"
+      echo "added /workspace trust to $codex_config" >&2
+    fi
+  }
 
   docker_find_worktree_containers() {
     local match_ids
@@ -148,6 +204,8 @@ cxhere() {
       echo "added .env* to $gitignore_path"
     fi
   fi
+
+  codex_ensure_workspace_trust
 
   echo "worktree directory: $worktree_dir"
   if command -v code >/dev/null 2>&1; then
