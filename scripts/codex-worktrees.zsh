@@ -174,7 +174,10 @@ cxhere() {
     -e CODEX_HOME=/home/codex/.codex \
     -w /workspace \
     codex-cli:local \
-    --full-auto --search
+    --sandbox workspace-write \
+    --ask-for-approval never \
+    --network-access true \
+    --search
   )
 }
 
