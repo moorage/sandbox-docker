@@ -174,9 +174,7 @@ cxhere() {
     -e CODEX_HOME=/home/codex/.codex \
     -w /workspace \
     codex-cli:local \
-    --sandbox workspace-write \
-    --ask-for-approval never \
-    --network-access true \
+    --dangerously-bypass-approvals-and-sandbox \
     --search
   )
 }
