@@ -12,6 +12,9 @@ cxhere() {
   local branch_name worktree_slug repo_root repo_parent repo_name worktrees_root worktree_dir
   local plans_url plans_path create_plans
   local agents_url agents_path create_agents
+  local env_file create_env_file
+  local gitignore_path create_gitignore add_env_ignore
+  local env_file_arg
   repo_root="$(git rev-parse --show-toplevel)"
   branch_name="$1"
   worktree_slug="${branch_name//\//__}"
@@ -23,6 +26,9 @@ cxhere() {
   plans_path="$worktree_dir/.agent/PLANS.md"
   agents_url="https://raw.githubusercontent.com/moorage/sandbox-docker/refs/heads/main/AGENTS.example.global.md"
   agents_path="${CODEX_HOME:-$HOME/.codex}/AGENTS.md"
+  env_file="$worktree_dir/.env.cx.local"
+  gitignore_path="$worktree_dir/.gitignore"
+  env_file_arg=()
 
   docker_find_worktree_containers() {
     local match_ids
@@ -104,6 +110,29 @@ cxhere() {
     fi
   fi
 
+  if [ ! -f "$env_file" ]; then
+    echo "missing env file: $env_file" >&2
+    read -r "create_env_file?Create it? [y/N] "
+    if [[ "$create_env_file" == [yY]* ]]; then
+      : > "$env_file"
+      echo "created env file: $env_file"
+    fi
+  fi
+
+  if [ ! -f "$gitignore_path" ]; then
+    read -r "create_gitignore?Create $gitignore_path and ignore .env* files? [y/N] "
+    if [[ "$create_gitignore" == [yY]* ]]; then
+      printf "%s\n" ".env*" > "$gitignore_path"
+      echo "created $gitignore_path with .env* ignore"
+    fi
+  elif ! rg -q '^[[:space:]]*\.env([[:space:]]*$|\*|[.])' "$gitignore_path"; then
+    read -r "add_env_ignore?Add .env* to $gitignore_path? [y/N] "
+    if [[ "$add_env_ignore" == [yY]* ]]; then
+      printf "%s\n" ".env*" >> "$gitignore_path"
+      echo "added .env* to $gitignore_path"
+    fi
+  fi
+
   echo "worktree directory: $worktree_dir"
   if command -v code >/dev/null 2>&1; then
     echo "open in VS Code: code \"$worktree_dir\""
@@ -126,6 +155,10 @@ cxhere() {
     echo "open in Explorer: explorer.exe \"$(pwd -W 2>/dev/null)\""
   fi
 
+  if [ -f "$env_file" ]; then
+    env_file_arg=(--env-file "$env_file")
+  fi
+
   docker run --rm -it \
     --init \
     --cap-drop=ALL \
@@ -137,6 +170,7 @@ cxhere() {
     -v "$worktree_dir":/workspace:rw \
     -v "$HOME/.gitconfig":/home/codex/.gitconfig:ro \
     -v "$HOME/.codex":/home/codex/.codex:rw \
+    "${env_file_arg[@]}" \
     -e CODEX_HOME=/home/codex/.codex \
     -w /workspace \
     codex-cli:local \
