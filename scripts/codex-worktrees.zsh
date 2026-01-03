@@ -13,6 +13,7 @@ cxhere() {
   local plans_url plans_path create_plans
   local agents_url agents_path create_agents
   local env_file create_env_file
+  local -a env_sources
   local gitignore_path create_gitignore add_env_ignore
   local env_file_arg
   repo_root="$(git rev-parse --show-toplevel)"
@@ -108,6 +109,21 @@ cxhere() {
         echo "neither curl nor wget is available; please create $agents_path manually." >&2
       fi
     fi
+  fi
+
+  setopt local_options null_glob
+  env_sources=("$repo_root"/.env*)
+  if (( ${#env_sources[@]} )); then
+    local env_source env_target
+    for env_source in "${env_sources[@]}"; do
+      if [ -f "$env_source" ]; then
+        env_target="$worktree_dir/$(basename "$env_source")"
+        if [ ! -f "$env_target" ]; then
+          cp "$env_source" "$env_target"
+          echo "copied env file: $env_target"
+        fi
+      fi
+    done
   fi
 
   if [ ! -f "$env_file" ]; then
