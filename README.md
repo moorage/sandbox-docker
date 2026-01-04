@@ -1,5 +1,7 @@
 # sandbox-docker
 
+This repo is what I currently use to sandbox my development environment for Codex CLI, shared in the spirit of openness. It runs Codex in a Docker container and mounts your repo and default Codex config.  It has helper flows that creates/cleans a dedicated git worktree and launches the container against it, to enable isolated parallel sessions.
+
 ## Build the Docker image
 
 ```bash
