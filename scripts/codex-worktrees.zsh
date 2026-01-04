@@ -246,6 +246,7 @@ cxhere() {
     -v "$HOME/.codex":/home/codex/.codex:rw \
     "${env_file_arg[@]}" \
     -e CODEX_HOME=/home/codex/.codex \
+    -e NPM_CONFIG_CACHE=/home/codex/.npm \
     -w /workspace \
     codex-cli:local \
     --dangerously-bypass-approvals-and-sandbox \
