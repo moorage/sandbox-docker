@@ -240,7 +240,7 @@ cxhere() {
     --pids-limit=256 \
     --read-only \
     --tmpfs /tmp:rw,noexec,nosuid,nodev \
-    --tmpfs /home/codex:rw,noexec,nosuid,nodev,size=512m \
+    --tmpfs /home/codex:rw,noexec,nosuid,nodev,size=512m,uid=10001,gid=10001 \
     -v "$worktree_dir":/workspace:rw \
     -v "$HOME/.gitconfig":/home/codex/.gitconfig:ro \
     -v "$HOME/.codex":/home/codex/.codex:rw \
