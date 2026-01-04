@@ -37,10 +37,10 @@ cxhere() {
   codex_workspace_trust_present() {
     [ -f "$codex_config" ] || return 1
     awk '
-      BEGIN{in=0;ok=0}
-      /^\[/{in=0}
-      /^\[projects\."\/workspace"\]/{in=1}
-      in && /^[[:space:]]*trust_level[[:space:]]*=[[:space:]]*"trusted"[[:space:]]*$/{ok=1}
+      BEGIN{in_section=0;ok=0}
+      /^\[/{in_section=0}
+      /^\[projects\."\/workspace"\]/{in_section=1}
+      in_section && /^[[:space:]]*trust_level[[:space:]]*=[[:space:]]*"trusted"[[:space:]]*$/{ok=1}
       END{exit ok?0:1}
     ' "$codex_config"
   }
@@ -67,17 +67,17 @@ cxhere() {
       local tmp_config
       tmp_config="$(mktemp)"
       awk '
-        BEGIN{in=0;done=0}
-        /^\[projects\."\/workspace"\]/{print; in=1; next}
-        /^\[/{ if (in && !done){print "trust_level = \"trusted\""; done=1} in=0 }
+        BEGIN{in_section=0;done=0}
+        /^\[projects\."\/workspace"\]/{print; in_section=1; next}
+        /^\[/{ if (in_section && !done){print "trust_level = \"trusted\""; done=1} in_section=0 }
         {
-          if (in && $0 ~ /^[[:space:]]*trust_level[[:space:]]*=/) {
+          if (in_section && $0 ~ /^[[:space:]]*trust_level[[:space:]]*=/) {
             if (!done) {print "trust_level = \"trusted\""; done=1}
             next
           }
           print
         }
-        END{ if (in && !done) print "trust_level = \"trusted\"" }
+        END{ if (in_section && !done) print "trust_level = \"trusted\"" }
       ' "$codex_config" > "$tmp_config"
       mv "$tmp_config" "$codex_config"
       echo "updated $codex_config with /workspace trust" >&2
