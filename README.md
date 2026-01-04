@@ -27,6 +27,13 @@ mkdir -p ~/.codex/rules
 cp /path/to/sandbox-docker/default.example.rules ~/.codex/rules/default.rules
 ```
 
+Optional: integrate the example config into your local Codex config:
+
+```bash
+mkdir -p ~/.codex
+cat /path/to/sandbox-docker/config.example.toml >> ~/.codex/config.toml
+```
+
 ## Use `cxhere`, `cxclose`, and `cxlist`
 
 Start a Codex session in a dedicated git worktree + branch:
