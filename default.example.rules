@@ -1,0 +1,19 @@
+# Optional: place this in ~/.codex/rules/default.rules if you like them.
+
+# Blocks
+prefix_rule(pattern=["rm"], decision="prompt")
+prefix_rule(pattern=["sudo"], decision="forbidden")
+prefix_rule(pattern=["ssh"], decision="forbidden")
+prefix_rule(pattern=["scp"], decision="forbidden")
+
+# Allow (or change to force prompts) on supply-chain / outbound-y operations
+prefix_rule(pattern=["bash", "-c"], decision="allow")
+prefix_rule(pattern=["sh", "-c"], decision="allow")
+
+# Allow (or change to force prompts) on supply-chain / outbound-y operations
+prefix_rule(pattern=["npm", "install"], decision="allow")
+prefix_rule(pattern=["pnpm", "add"], decision="allow")
+prefix_rule(pattern=["pip", "install"], decision="allow")
+prefix_rule(pattern=["curl"], decision="allow")
+prefix_rule(pattern=["wget"], decision="allow")
+prefix_rule(pattern=["git", "push"], decision="allow")

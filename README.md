@@ -1,14 +1,53 @@
 # sandbox-docker
 
-## Building the Docker Image
-
-To build the Docker image, run the following command in the terminal:
+## Build the Docker image
 
 ```bash
 docker build -t codex-cli:local .
 ```
 
-## Running the Docker Container
+## Set up the zsh shortcuts
+
+Add this to your `~/.zshrc`:
+
+```bash
+source /path/to/sandbox-docker/scripts/codex-worktrees.zsh
+```
+
+Reload your shell:
+
+```bash
+source ~/.zshrc
+```
+
+Optional: copy the default rules template:
+
+```bash
+mkdir -p ~/.codex/rules
+cp /path/to/sandbox-docker/default.example.rules ~/.codex/rules/default.rules
+```
+
+## Use `cxhere`, `cxclose`, and `cxlist`
+
+Start a Codex session in a dedicated git worktree + branch:
+
+```bash
+cxhere mpm/my-feature
+```
+
+Cleanup when you're done:
+
+```bash
+cxclose mpm/my-feature
+```
+
+List active Codex worktrees and flag anything prunable/stale:
+
+```bash
+cxlist
+```
+
+## Running the Docker container (manual)
 
 ```bash
 docker run --rm -it \
@@ -18,22 +57,26 @@ docker run --rm -it \
   --pids-limit=256 \
   --read-only \
   --tmpfs /tmp:rw,noexec,nosuid,nodev \
-  --tmpfs /home/codex:rw,noexec,nosuid,nodev,size=512m \
-  -v "$(pwd)":/workspace:rw \
+  --tmpfs /home/codex:rw,noexec,nosuid,nodev,size=512m,uid=10001,gid=10001 \
+  -v "$worktree_dir":/workspace:rw \
   -v "$HOME/.gitconfig":/home/codex/.gitconfig:ro \
   -v "$HOME/.codex":/home/codex/.codex:rw \
+  "${env_file_arg[@]}" \
   -e CODEX_HOME=/home/codex/.codex \
+  -e NPM_CONFIG_CACHE=/home/codex/.npm \
+  -w /workspace \
   codex-cli:local \
-  --full-auto --search
+  --dangerously-bypass-approvals-and-sandbox \
+  --search
 ```
 
-## macOS zsh shortcut (`cxhere`)
+## Implementation and behavior notes
 
-Source the helper file below from your `~/.zshrc` to run Codex in a dedicated git worktree and branch.
-You pass a worktree name, which is also used as the branch name. This keeps multiple Codex sessions isolated
-and lets you run them concurrently in the same repo. Slashes in the name are supported (for example
-`mpm/my-feature`), and are only sanitized for the worktree directory on disk. Worktrees are created
-next to the repo in a sibling directory named `<PROJECT-DIR-NAME>-worktrees/<WORKTREENAME>`.
+`cxhere` runs Codex in a dedicated git worktree and branch. You pass a worktree name, which is also used as the
+branch name. This keeps multiple Codex sessions isolated and lets you run them concurrently in the same repo.
+Slashes in the name are supported (for example `mpm/my-feature`) and are only sanitized for the worktree
+directory on disk. Worktrees are created next to the repo in a sibling directory named
+`<PROJECT-DIR-NAME>-worktrees/<WORKTREENAME>`.
 
 Example paths:
 
@@ -53,28 +96,3 @@ Behavior notes:
 - After creating or reusing a worktree, `cxhere` checks for `.agent/PLANS.md` and offers to create it from the project template if missing.
 - Before launching Docker, `cxhere` checks for `$CODEX_HOME/AGENTS.md` and offers to create it from the global template if missing.
 - If Docker is not running or the daemon is unreachable, `cxhere` will surface the Docker error output and exit non-zero.
-
-Add this to your `~/.zshrc`:
-
-```bash
-source /path/to/sandbox-docker/scripts/codex-worktrees.zsh
-```
-
-Reload your shell and use it with a worktree name:
-
-```bash
-source ~/.zshrc
-cxhere mpm/my-feature
-```
-
-Cleanup when you're done:
-
-```bash
-cxclose mpm/my-feature
-```
-
-List active Codex worktrees and flag anything prunable/stale:
-
-```bash
-cxlist
-```
