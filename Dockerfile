@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM node:22-slim
+FROM node:25-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
   git openssh-client ca-certificates \
@@ -8,6 +8,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   && rm -rf /var/lib/apt/lists/*
 
 # Codex CLI (npm package)
+RUN npm install -g npm@latest
 RUN npm i -g @openai/codex
 
 # Non-root user
