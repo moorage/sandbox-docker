@@ -17,6 +17,7 @@ cxhere() {
   local gitignore_path create_gitignore add_env_ignore
   local env_file_arg
   local codex_config codex_config_dir add_workspace_trust
+  local use_docker
   repo_root="$(git rev-parse --show-toplevel)"
   branch_name="$1"
   worktree_slug="${branch_name//\//__}"
@@ -33,6 +34,11 @@ cxhere() {
   env_file="$worktree_dir/.env.cx.local"
   gitignore_path="$worktree_dir/.gitignore"
   env_file_arg=()
+  use_docker=1
+
+  case "${CXHERE_NO_DOCKER:-}" in
+    1|true|TRUE|yes|YES|y|Y) use_docker=0 ;;
+  esac
 
   codex_workspace_trust_present() {
     [ -f "$codex_config" ] || return 1
@@ -101,19 +107,21 @@ cxhere() {
 
   mkdir -p "$worktrees_root"
   if git -C "$repo_root" worktree list --porcelain | rg -q "^worktree $worktree_dir$"; then
-    local matching_ids
-    matching_ids="$(docker_find_worktree_containers)"
+    if [ "$use_docker" -eq 1 ]; then
+      local matching_ids
+      matching_ids="$(docker_find_worktree_containers)"
 
-    if [ -n "$matching_ids" ]; then
-      local match_count
-      match_count="$(printf "%s\n" "$matching_ids" | wc -l | tr -d ' ')"
-      if [ "$match_count" -gt 1 ]; then
-        echo "multiple containers running for worktree: $worktree_dir" >&2
-        echo "example container: $(printf "%s\n" "$matching_ids" | head -n1)" >&2
-        return 1
+      if [ -n "$matching_ids" ]; then
+        local match_count
+        match_count="$(printf "%s\n" "$matching_ids" | wc -l | tr -d ' ')"
+        if [ "$match_count" -gt 1 ]; then
+          echo "multiple containers running for worktree: $worktree_dir" >&2
+          echo "example container: $(printf "%s\n" "$matching_ids" | head -n1)" >&2
+          return 1
+        fi
+        echo "container already running for worktree: $worktree_dir ($matching_ids)" >&2
+        return 0
       fi
-      echo "container already running for worktree: $worktree_dir ($matching_ids)" >&2
-      return 0
     fi
   else
     if [ -e "$worktree_dir" ]; then
@@ -233,24 +241,37 @@ cxhere() {
     env_file_arg=(--env-file "$env_file")
   fi
 
-  docker run --rm -it \
-    --init \
-    --cap-drop=ALL \
-    --security-opt=no-new-privileges \
-    --pids-limit=256 \
-    --read-only \
-    --tmpfs /tmp:rw,noexec,nosuid,nodev \
-    --tmpfs /home/codex:rw,noexec,nosuid,nodev,size=512m,uid=10001,gid=10001 \
-    -v "$worktree_dir":/workspace:rw \
-    -v "$HOME/.gitconfig":/home/codex/.gitconfig:ro \
-    -v "$HOME/.codex":/home/codex/.codex:rw \
-    "${env_file_arg[@]}" \
-    -e CODEX_HOME=/home/codex/.codex \
-    -e NPM_CONFIG_CACHE=/home/codex/.npm \
-    -w /workspace \
-    codex-cli:local \
-    --dangerously-bypass-approvals-and-sandbox \
-    --search
+  if [ "$use_docker" -eq 1 ]; then
+    docker run --rm -it \
+      --init \
+      --cap-drop=ALL \
+      --security-opt=no-new-privileges \
+      --pids-limit=256 \
+      --read-only \
+      --tmpfs /tmp:rw,noexec,nosuid,nodev \
+      --tmpfs /home/codex:rw,noexec,nosuid,nodev,size=512m,uid=10001,gid=10001 \
+      -v "$worktree_dir":/workspace:rw \
+      -v "$HOME/.gitconfig":/home/codex/.gitconfig:ro \
+      -v "$HOME/.codex":/home/codex/.codex:rw \
+      "${env_file_arg[@]}" \
+      -e CODEX_HOME=/home/codex/.codex \
+      -e NPM_CONFIG_CACHE=/home/codex/.npm \
+      -w /workspace \
+      codex-cli:local \
+      --dangerously-bypass-approvals-and-sandbox \
+      --search
+  else
+    if [ -f "$env_file" ]; then
+      set -a
+      . "$env_file"
+      set +a
+    fi
+    if ! command -v codex >/dev/null 2>&1; then
+      echo "codex CLI not found in PATH; install it or enable Docker mode." >&2
+      return 1
+    fi
+    (cd "$worktree_dir" && codex --dangerously-bypass-approvals-and-sandbox --search)
+  fi
   )
 }
 

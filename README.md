@@ -44,6 +44,12 @@ Start a Codex session in a dedicated git worktree + branch:
 cxhere mpm/my-feature
 ```
 
+Skip Docker and run the local `codex` CLI (still uses worktrees):
+
+```bash
+CXHERE_NO_DOCKER=1 cxhere mpm/my-feature
+```
+
 Cleanup when you're done:
 
 ```bash
@@ -98,10 +104,11 @@ Behavior notes:
 
 - If the branch already exists and no worktree exists for it, `cxhere` will reuse the branch and create a worktree.
 - If the target worktree directory exists on disk but is not registered with git, `cxhere` will stop and print guidance.
-- If a worktree already exists, `cxhere` checks for running containers with a bind mount to that worktree:
+- If a worktree already exists, `cxhere` checks for running containers with a bind mount to that worktree (Docker mode only):
   - Exactly one container: print a message and exit 0.
   - More than one: print a message and exit non-zero.
   - None: launch Docker with the existing worktree.
+- If `CXHERE_NO_DOCKER=1`, container checks are skipped and `codex` is run directly on the worktree.
 - After creating or reusing a worktree, `cxhere` checks for `.agent/PLANS.md` and offers to create it from the project template if missing.
 - Before launching Docker, `cxhere` checks for `$CODEX_HOME/AGENTS.md` and offers to create it from the global template if missing.
 - If Docker is not running or the daemon is unreachable, `cxhere` will surface the Docker error output and exit non-zero.
