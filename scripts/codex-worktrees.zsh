@@ -5,11 +5,14 @@ cxhere() {
   # This avoids zsh exiting entirely when a command fails.
   ( set -e
   if [ -z "$1" ]; then
-    echo "usage: cxhere <worktree-name>" >&2
+    echo "usage: cxhere <worktree-name> [session-id]" >&2
+    echo "env: CXHERE_NO_DOCKER=1 to run codex locally without docker" >&2
     return 2
   fi
 
   local branch_name worktree_slug repo_root repo_parent repo_name worktrees_root worktree_dir
+  local session_id
+  local -a codex_args
   local plans_url plans_path create_plans
   local agents_url agents_path create_agents
   local env_file create_env_file
@@ -20,6 +23,7 @@ cxhere() {
   local use_docker
   repo_root="$(git rev-parse --show-toplevel)"
   branch_name="$1"
+  session_id="$2"
   worktree_slug="${branch_name//\//__}"
   repo_parent="$(dirname "$repo_root")"
   repo_name="$(basename "$repo_root")"
@@ -241,6 +245,11 @@ cxhere() {
     env_file_arg=(--env-file "$env_file")
   fi
 
+  codex_args=()
+  if [ -n "$session_id" ]; then
+    codex_args=(resume "$session_id")
+  fi
+
   if [ "$use_docker" -eq 1 ]; then
     docker run --rm -it \
       --init \
@@ -258,6 +267,7 @@ cxhere() {
       -e NPM_CONFIG_CACHE=/home/codex/.npm \
       -w /workspace \
       codex-cli:local \
+      "${codex_args[@]}" \
       --dangerously-bypass-approvals-and-sandbox \
       --search
   else
@@ -270,7 +280,7 @@ cxhere() {
       echo "codex CLI not found in PATH; install it or enable Docker mode." >&2
       return 1
     fi
-    (cd "$worktree_dir" && codex --dangerously-bypass-approvals-and-sandbox --search)
+    (cd "$worktree_dir" && codex "${codex_args[@]}" --dangerously-bypass-approvals-and-sandbox --search)
   fi
   )
 }
