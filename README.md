@@ -8,9 +8,9 @@ This repo is what I currently use to sandbox my development environment for Code
 docker build -t codex-cli:local .
 ```
 
-## Set up the zsh shortcuts
+## Set up the shell shortcuts
 
-Add this to your `~/.zshrc`:
+Add this to your shell config:
 
 ```bash
 source /path/to/sandbox-docker/scripts/codex-worktrees.zsh
@@ -19,8 +19,14 @@ source /path/to/sandbox-docker/scripts/codex-worktrees.zsh
 Reload your shell:
 
 ```bash
+source ~/.bashrc
 source ~/.zshrc
 ```
+
+Notes:
+
+- For Bash, use `~/.bashrc` (or `~/.bash_profile` on macOS if that is what your shell reads).
+- For Zsh, use `~/.zshrc`.
 
 Optional: copy the default rules template:
 

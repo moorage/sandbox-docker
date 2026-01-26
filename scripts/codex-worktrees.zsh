@@ -18,7 +18,7 @@ cxhere() {
   local env_file create_env_file
   local -a env_sources
   local gitignore_path create_gitignore add_env_ignore
-  local env_file_arg
+  local -a env_file_arg
   local codex_config codex_config_dir add_workspace_trust
   local use_docker
   repo_root="$(git rev-parse --show-toplevel)"
@@ -61,7 +61,8 @@ cxhere() {
     fi
 
     echo "codex config missing trusted /workspace entry: $codex_config" >&2
-    read -r "add_workspace_trust?Add it? [y/N] "
+    printf "%s" "Add it? [y/N] " >&2
+    IFS= read -r add_workspace_trust
     if [[ "$add_workspace_trust" != [yY]* ]]; then
       return 0
     fi
@@ -143,7 +144,8 @@ cxhere() {
 
   if [ ! -f "$plans_path" ]; then
     echo "missing plans file: $plans_path" >&2
-    read -r "create_plans?Create it from $plans_url? [y/N] "
+    printf "%s" "Create it from $plans_url? [y/N] " >&2
+    IFS= read -r create_plans
     if [[ "$create_plans" == [yY]* ]]; then
       mkdir -p "$(dirname "$plans_path")"
       if command -v curl >/dev/null 2>&1; then
@@ -162,7 +164,8 @@ cxhere() {
 
   if [ ! -f "$agents_path" ]; then
     echo "missing agents file: $agents_path" >&2
-    read -r "create_agents?Create it from $agents_url? [y/N] "
+    printf "%s" "Create it from $agents_url? [y/N] " >&2
+    IFS= read -r create_agents
     if [[ "$create_agents" == [yY]* ]]; then
       mkdir -p "$(dirname "$agents_path")"
       if command -v curl >/dev/null 2>&1; then
@@ -179,7 +182,13 @@ cxhere() {
     fi
   fi
 
-  setopt local_options null_glob
+  if [ -n "${ZSH_VERSION-}" ]; then
+    setopt local_options null_glob
+  elif [ -n "${BASH_VERSION-}" ]; then
+    local _nullglob_restore
+    _nullglob_restore="$(shopt -p nullglob)"
+    shopt -s nullglob
+  fi
   env_sources=("$repo_root"/.env*)
   if (( ${#env_sources[@]} )); then
     local env_source env_target
@@ -196,7 +205,8 @@ cxhere() {
 
   if [ ! -f "$env_file" ]; then
     echo "missing env file: $env_file" >&2
-    read -r "create_env_file?Create it? [y/N] "
+    printf "%s" "Create it? [y/N] " >&2
+    IFS= read -r create_env_file
     if [[ "$create_env_file" == [yY]* ]]; then
       : > "$env_file"
       echo "created env file: $env_file"
@@ -204,17 +214,23 @@ cxhere() {
   fi
 
   if [ ! -f "$gitignore_path" ]; then
-    read -r "create_gitignore?Create $gitignore_path and ignore .env* files? [y/N] "
+    printf "%s" "Create $gitignore_path and ignore .env* files? [y/N] " >&2
+    IFS= read -r create_gitignore
     if [[ "$create_gitignore" == [yY]* ]]; then
       printf "%s\n" ".env*" > "$gitignore_path"
       echo "created $gitignore_path with .env* ignore"
     fi
   elif ! rg -q '^[[:space:]]*\.env([[:space:]]*$|\*|[.])' "$gitignore_path"; then
-    read -r "add_env_ignore?Add .env* to $gitignore_path? [y/N] "
+    printf "%s" "Add .env* to $gitignore_path? [y/N] " >&2
+    IFS= read -r add_env_ignore
     if [[ "$add_env_ignore" == [yY]* ]]; then
       printf "%s\n" ".env*" >> "$gitignore_path"
       echo "added .env* to $gitignore_path"
     fi
+  fi
+
+  if [ -n "${BASH_VERSION-}" ] && [ -n "${_nullglob_restore-}" ]; then
+    eval "$_nullglob_restore"
   fi
 
   codex_ensure_workspace_trust
