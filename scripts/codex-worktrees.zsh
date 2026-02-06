@@ -18,7 +18,19 @@ cxhere() {
   local env_file create_env_file
   local -a env_sources
   local gitignore_path create_gitignore add_env_ignore
+  local repo_gitignore_path
+  local playwright_browsers_path
+  local playwright_browsers_rel
+  local add_playwright_ignore
+  local seccomp_profile_example
+  local seccomp_profile_target
+  local create_seccomp_profile
+  local add_seccomp_ignore
   local -a env_file_arg
+  local seccomp_profile
+  local -a docker_security_opts
+  local gh_config_dir use_gh
+  local -a gh_config_arg
   local codex_config codex_config_dir add_workspace_trust
   local use_docker
   repo_root="$(git rev-parse --show-toplevel)"
@@ -37,11 +49,24 @@ cxhere() {
   codex_config_dir="$(dirname "$codex_config")"
   env_file="$worktree_dir/.env.cx.local"
   gitignore_path="$worktree_dir/.gitignore"
+  repo_gitignore_path="$repo_root/.gitignore"
+  playwright_browsers_path="/workspace/.pw-browsers"
+  playwright_browsers_rel=""
+  seccomp_profile_example="$repo_root/seccomp_profile.example.json"
+  seccomp_profile_target="$repo_root/seccomp_profile.json"
   env_file_arg=()
+  seccomp_profile="$repo_root/seccomp_profile.json"
+  docker_security_opts=(--security-opt=no-new-privileges)
   use_docker=1
+  use_gh=1
+  gh_config_dir="$HOME/.config/gh"
+  gh_config_arg=()
 
   case "${CXHERE_NO_DOCKER:-}" in
     1|true|TRUE|yes|YES|y|Y) use_docker=0 ;;
+  esac
+  case "${CXHERE_GH:-1}" in
+    0|false|FALSE|no|NO|n|N) use_gh=0 ;;
   esac
 
   codex_workspace_trust_present() {
@@ -109,6 +134,48 @@ cxhere() {
     )"
     printf "%s\n" "$match_ids"
   }
+
+  if [[ "$playwright_browsers_path" == /workspace/* ]]; then
+    playwright_browsers_rel="${playwright_browsers_path#/workspace/}"
+    if [ -n "$playwright_browsers_rel" ]; then
+      if [ ! -f "$repo_gitignore_path" ]; then
+        printf "%s\n" "$playwright_browsers_rel" > "$repo_gitignore_path"
+        echo "created $repo_gitignore_path with $playwright_browsers_rel ignore"
+      elif ! rg -q "^[[:space:]]*${playwright_browsers_rel//\//\\/}([[:space:]]*$|/)" "$repo_gitignore_path"; then
+        printf "%s" "Add $playwright_browsers_rel to $repo_gitignore_path? [y/N] " >&2
+        IFS= read -r add_playwright_ignore
+        if [[ "$add_playwright_ignore" == [yY]* ]]; then
+          printf "%s\n" "$playwright_browsers_rel" >> "$repo_gitignore_path"
+          echo "added $playwright_browsers_rel to $repo_gitignore_path"
+        fi
+      fi
+    fi
+  fi
+
+  if [ -f "$seccomp_profile_example" ] && [ ! -f "$seccomp_profile_target" ]; then
+    printf "%s" "Copy seccomp profile to $seccomp_profile_target? [y/N] " >&2
+    IFS= read -r create_seccomp_profile
+    if [[ "$create_seccomp_profile" == [yY]* ]]; then
+      cp "$seccomp_profile_example" "$seccomp_profile_target"
+      echo "created $seccomp_profile_target"
+    fi
+  fi
+
+  if [ ! -f "$repo_gitignore_path" ]; then
+    printf "%s" "Create $repo_gitignore_path and ignore seccomp_profile.json? [y/N] " >&2
+    IFS= read -r add_seccomp_ignore
+    if [[ "$add_seccomp_ignore" == [yY]* ]]; then
+      printf "%s\n" "seccomp_profile.json" > "$repo_gitignore_path"
+      echo "created $repo_gitignore_path with seccomp_profile.json ignore"
+    fi
+  elif ! rg -q '^[[:space:]]*seccomp_profile\.json([[:space:]]*$|/)' "$repo_gitignore_path"; then
+    printf "%s" "Add seccomp_profile.json to $repo_gitignore_path? [y/N] " >&2
+    IFS= read -r add_seccomp_ignore
+    if [[ "$add_seccomp_ignore" == [yY]* ]]; then
+      printf "%s\n" "seccomp_profile.json" >> "$repo_gitignore_path"
+      echo "added seccomp_profile.json to $repo_gitignore_path"
+    fi
+  fi
 
   mkdir -p "$worktrees_root"
   if git -C "$repo_root" worktree list --porcelain | rg -q "^worktree $worktree_dir$"; then
@@ -267,10 +334,22 @@ cxhere() {
   fi
 
   if [ "$use_docker" -eq 1 ]; then
+    if [ -f "$seccomp_profile" ]; then
+      docker_security_opts+=(--security-opt "seccomp=$seccomp_profile")
+    fi
+    if [ "$use_gh" -eq 1 ]; then
+      if [ -d "$gh_config_dir" ]; then
+        gh_config_arg=(-v "$gh_config_dir":/home/codex/.config/gh:rw)
+      else
+        echo "warning: gh config not found at $gh_config_dir; skipping gh mount" >&2
+      fi
+    fi
     docker run --rm -it \
       --init \
+      --ipc=host \
+      --user codex \
       --cap-drop=ALL \
-      --security-opt=no-new-privileges \
+      "${docker_security_opts[@]}" \
       --pids-limit=256 \
       --read-only \
       --tmpfs /tmp:rw,noexec,nosuid,nodev \
@@ -278,6 +357,7 @@ cxhere() {
       -v "$worktree_dir":/workspace:rw \
       -v "$HOME/.gitconfig":/home/codex/.gitconfig:ro \
       -v "$HOME/.codex":/home/codex/.codex:rw \
+      "${gh_config_arg[@]}" \
       "${env_file_arg[@]}" \
       -e CODEX_HOME=/home/codex/.codex \
       -e NPM_CONFIG_CACHE=/home/codex/.npm \

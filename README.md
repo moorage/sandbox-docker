@@ -5,7 +5,7 @@ This repo is what I currently use to sandbox my development environment for Code
 ## Build the Docker image
 
 ```bash
-docker build -t codex-cli:local .
+./scripts/build-local.sh
 ```
 
 ## Set up the shell shortcuts
@@ -50,10 +50,23 @@ Start a Codex session in a dedicated git worktree + branch:
 cxhere mpm/my-feature
 ```
 
+Resume a Codex chat by passing the session ID as the second argument:
+
+```bash
+cxhere mpm/my-feature <session-id>
+```
+
 Skip Docker and run the local `codex` CLI (still uses worktrees):
 
 ```bash
 CXHERE_NO_DOCKER=1 cxhere mpm/my-feature
+```
+
+By default `cxhere` mounts your GitHub CLI config from `~/.config/gh` so `gh` can push and open PRs.
+Disable it with:
+
+```bash
+CXHERE_GH=0 cxhere mpm/my-feature
 ```
 
 Cleanup when you're done:
@@ -73,6 +86,8 @@ cxlist
 ```bash
 docker run --rm -it \
   --init \
+  --ipc=host \
+  --user codex \
   --cap-drop=ALL \
   --security-opt=no-new-privileges \
   --pids-limit=256 \
@@ -90,6 +105,12 @@ docker run --rm -it \
   --dangerously-bypass-approvals-and-sandbox \
   --search
 ```
+
+Optional seccomp hardening:
+
+- Copy `seccomp_profile.example.json` to `seccomp_profile.json` in the repo root.
+- `cxhere` will prompt to copy and gitignore it, and will use it automatically if present.
+- `--ipc=host` avoids Chromium shared-memory crashes in containers.
 
 ## Implementation and behavior notes
 
