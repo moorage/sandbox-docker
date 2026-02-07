@@ -19,19 +19,16 @@ for tag in "$IMAGE_NAME" "$PROJECT_NAME"; do
   fi
 done
 
-apt_cachebust=1
 npm_cachebust=1
 if [ -f "$CACHE_FILE" ]; then
-  IFS=' ' read -r apt_cachebust npm_cachebust < "$CACHE_FILE" || true
+  IFS=' ' read -r npm_cachebust < "$CACHE_FILE" || true
 fi
-apt_cachebust=$((apt_cachebust + 1))
 npm_cachebust=$((npm_cachebust + 1))
-printf "%s %s\n" "$apt_cachebust" "$npm_cachebust" > "$CACHE_FILE"
+printf "%s\n" "$npm_cachebust" > "$CACHE_FILE"
 
 # Build fresh.
 cd "$ROOT_DIR"
 docker build \
-  --build-arg APT_CACHEBUST="$apt_cachebust" \
   --build-arg NPM_CACHEBUST="$npm_cachebust" \
   -t "$IMAGE_NAME" \
   .

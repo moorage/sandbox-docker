@@ -33,6 +33,11 @@ cxhere() {
   local -a gh_config_arg
   local codex_config codex_config_dir add_workspace_trust
   local use_docker
+  local pids_limit
+  local tmpfs_tmp_size
+  local tmpfs_home_size
+  local shm_size
+  local -a docker_resource_opts
   repo_root="$(git rev-parse --show-toplevel)"
   branch_name="$1"
   session_id="$2"
@@ -61,6 +66,18 @@ cxhere() {
   use_gh=1
   gh_config_dir="$HOME/.config/gh"
   gh_config_arg=()
+  docker_resource_opts=()
+
+  # Defaults tuned for running Playwright (headed Chromium) alongside a Node server.
+  # These are all overrideable via env vars for tighter/looser setups.
+  pids_limit="${CXHERE_PIDS_LIMIT:-2048}"
+  tmpfs_tmp_size="${CXHERE_TMPFS_TMP_SIZE:-2g}"
+  tmpfs_home_size="${CXHERE_TMPFS_HOME_SIZE:-2g}"
+  shm_size="${CXHERE_SHM_SIZE:-1g}"
+  docker_resource_opts+=(--pids-limit="$pids_limit")
+  docker_resource_opts+=(--shm-size="$shm_size")
+  docker_resource_opts+=(--ulimit "nproc=${CXHERE_ULIMIT_NPROC:-8192}:${CXHERE_ULIMIT_NPROC:-8192}")
+  docker_resource_opts+=(--ulimit "nofile=${CXHERE_ULIMIT_NOFILE:-1048576}:${CXHERE_ULIMIT_NOFILE:-1048576}")
 
   case "${CXHERE_NO_DOCKER:-}" in
     1|true|TRUE|yes|YES|y|Y) use_docker=0 ;;
@@ -335,37 +352,41 @@ cxhere() {
 
   if [ "$use_docker" -eq 1 ]; then
     if [ -f "$seccomp_profile" ]; then
-      docker_security_opts+=(--security-opt "seccomp=$seccomp_profile")
-    fi
-    if [ "$use_gh" -eq 1 ]; then
+	    docker_security_opts+=(--security-opt "seccomp=$seccomp_profile")
+	    fi
+	    if [ "$use_gh" -eq 1 ]; then
       if [ -d "$gh_config_dir" ]; then
         gh_config_arg=(-v "$gh_config_dir":/home/codex/.config/gh:rw)
       else
         echo "warning: gh config not found at $gh_config_dir; skipping gh mount" >&2
       fi
-    fi
-    docker run --rm -it \
-      --init \
-      --ipc=host \
-      --user codex \
-      --cap-drop=ALL \
-      "${docker_security_opts[@]}" \
-      --pids-limit=256 \
-      --read-only \
-      --tmpfs /tmp:rw,noexec,nosuid,nodev \
-      --tmpfs /home/codex:rw,noexec,nosuid,nodev,size=512m,uid=10001,gid=10001 \
-      -v "$worktree_dir":/workspace:rw \
-      -v "$HOME/.gitconfig":/home/codex/.gitconfig:ro \
-      -v "$HOME/.codex":/home/codex/.codex:rw \
-      "${gh_config_arg[@]}" \
-      "${env_file_arg[@]}" \
-      -e CODEX_HOME=/home/codex/.codex \
-      -e NPM_CONFIG_CACHE=/home/codex/.npm \
-      -w /workspace \
-      codex-cli:local \
-      "${codex_args[@]}" \
-      --dangerously-bypass-approvals-and-sandbox \
-      --search
+	    fi
+	    docker run --rm -it \
+	      --init \
+	      --ipc=host \
+	      --user codex \
+	      --cap-drop=ALL \
+	      "${docker_security_opts[@]}" \
+	      "${docker_resource_opts[@]}" \
+	      --read-only \
+	      --tmpfs "/tmp:rw,noexec,nosuid,nodev,size=${tmpfs_tmp_size}" \
+	      --tmpfs "/home/codex:rw,noexec,nosuid,nodev,size=${tmpfs_home_size},uid=10001,gid=10001" \
+	      -v "$worktree_dir":/workspace:rw \
+	      -v "$HOME/.gitconfig":/home/codex/.gitconfig:ro \
+	      -v "$HOME/.codex":/home/codex/.codex:rw \
+	      "${gh_config_arg[@]}" \
+	      "${env_file_arg[@]}" \
+	      -e CODEX_HOME=/home/codex/.codex \
+	      -e NPM_CONFIG_CACHE=/home/codex/.npm \
+	      -e TMPDIR=/tmp \
+	      -e XDG_RUNTIME_DIR=/tmp/xdg-runtime \
+	      -e DISPLAY="${DISPLAY:-:99}" \
+	      -e XVFB_SCREEN="${XVFB_SCREEN:-1920x1080x24}" \
+	      -w /workspace \
+	      codex-cli:local \
+	      "${codex_args[@]}" \
+	      --dangerously-bypass-approvals-and-sandbox \
+	      --search
   else
     if [ -f "$env_file" ]; then
       set -a

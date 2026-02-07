@@ -81,37 +81,6 @@ List active Codex worktrees and flag anything prunable/stale:
 cxlist
 ```
 
-## Running the Docker container (manual)
-
-```bash
-docker run --rm -it \
-  --init \
-  --ipc=host \
-  --user codex \
-  --cap-drop=ALL \
-  --security-opt=no-new-privileges \
-  --pids-limit=256 \
-  --read-only \
-  --tmpfs /tmp:rw,noexec,nosuid,nodev \
-  --tmpfs /home/codex:rw,noexec,nosuid,nodev,size=512m,uid=10001,gid=10001 \
-  -v "$worktree_dir":/workspace:rw \
-  -v "$HOME/.gitconfig":/home/codex/.gitconfig:ro \
-  -v "$HOME/.codex":/home/codex/.codex:rw \
-  "${env_file_arg[@]}" \
-  -e CODEX_HOME=/home/codex/.codex \
-  -e NPM_CONFIG_CACHE=/home/codex/.npm \
-  -w /workspace \
-  codex-cli:local \
-  --dangerously-bypass-approvals-and-sandbox \
-  --search
-```
-
-Optional seccomp hardening:
-
-- Copy `seccomp_profile.example.json` to `seccomp_profile.json` in the repo root.
-- `cxhere` will prompt to copy and gitignore it, and will use it automatically if present.
-- `--ipc=host` avoids Chromium shared-memory crashes in containers.
-
 ## Implementation and behavior notes
 
 `cxhere` runs Codex in a dedicated git worktree and branch. You pass a worktree name, which is also used as the
@@ -127,7 +96,7 @@ Example paths:
 /path/to/sandbox-docker-worktrees/mpm__my-feature
 ```
 
-Behavior notes:
+### Behavior notes:
 
 - If the branch already exists and no worktree exists for it, `cxhere` will reuse the branch and create a worktree.
 - If the target worktree directory exists on disk but is not registered with git, `cxhere` will stop and print guidance.
@@ -138,4 +107,5 @@ Behavior notes:
 - If `CXHERE_NO_DOCKER=1`, container checks are skipped and `codex` is run directly on the worktree.
 - After creating or reusing a worktree, `cxhere` checks for `.agent/PLANS.md` and offers to create it from the project template if missing.
 - Before launching Docker, `cxhere` checks for `$CODEX_HOME/AGENTS.md` and offers to create it from the global template if missing.
+- The Docker image includes `xvfb-run`, so Playwright can launch headless browsers via `xvfb-run` if needed.
 - If Docker is not running or the daemon is unreachable, `cxhere` will surface the Docker error output and exit non-zero.
