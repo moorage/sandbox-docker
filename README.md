@@ -107,5 +107,6 @@ Example paths:
 - If `CXHERE_NO_DOCKER=1`, container checks are skipped and `codex` is run directly on the worktree.
 - After creating or reusing a worktree, `cxhere` checks for `.agent/PLANS.md` and offers to create it from the project template if missing.
 - Before launching Docker, `cxhere` checks for `$CODEX_HOME/AGENTS.md` and offers to create it from the global template if missing.
+- In Docker mode, `cxhere` mounts the main repo at its original absolute path as read-only, and mounts only `<repo>/.git` read-write. This lets git worktree metadata function while preventing writes to the main non-worktree files.
 - The Docker image includes `xvfb-run`, so Playwright can launch headless browsers via `xvfb-run` if needed.
 - If Docker is not running or the daemon is unreachable, `cxhere` will surface the Docker error output and exit non-zero.
