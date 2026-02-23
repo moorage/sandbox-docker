@@ -37,6 +37,7 @@ cxhere() {
   local tmpfs_tmp_size
   local tmpfs_home_size
   local shm_size
+  local repo_root_mount repo_git_mount
   local -a docker_resource_opts
   repo_root="$(git rev-parse --show-toplevel)"
   branch_name="$1"
@@ -67,6 +68,8 @@ cxhere() {
   gh_config_dir="$HOME/.config/gh"
   gh_config_arg=()
   docker_resource_opts=()
+  repo_root_mount="$repo_root"
+  repo_git_mount="$repo_root/.git"
 
   # Defaults tuned for running Playwright (headed Chromium) alongside a Node server.
   # These are all overrideable via env vars for tighter/looser setups.
@@ -372,6 +375,8 @@ cxhere() {
 	      --tmpfs "/tmp:rw,noexec,nosuid,nodev,size=${tmpfs_tmp_size}" \
 	      --tmpfs "/home/codex:rw,noexec,nosuid,nodev,size=${tmpfs_home_size},uid=10001,gid=10001" \
 	      -v "$worktree_dir":/workspace:rw \
+	      -v "$repo_root_mount":"$repo_root_mount":ro \
+	      -v "$repo_git_mount":"$repo_git_mount":rw \
 	      -v "$HOME/.gitconfig":/home/codex/.gitconfig:ro \
 	      -v "$HOME/.codex":/home/codex/.codex:rw \
 	      "${gh_config_arg[@]}" \
@@ -403,15 +408,20 @@ cxhere() {
 }
 
 cxclose() {
+  # Run in a subshell so command failures can't terminate the caller's shell.
+  ( set -e
   local repo_root repo_parent repo_name worktrees_root branch_name worktree_dir worktree_slug git_dir
-  local status_output locked_line
+  local status_output locked_line tracked_path tracked_branch
 
   if [ -z "$1" ]; then
     echo "usage: cxclose <worktree-name>" >&2
     return 2
   fi
 
-  repo_root="$(git rev-parse --show-toplevel)"
+  if ! repo_root="$(git rev-parse --show-toplevel 2>/dev/null)"; then
+    echo "not inside a git repository; run cxclose from the main repo or a worktree." >&2
+    return 1
+  fi
   branch_name="$1"
   worktree_slug="${branch_name//\//__}"
   repo_parent="$(dirname "$repo_root")"
@@ -419,8 +429,22 @@ cxclose() {
   worktrees_root="$repo_parent/${repo_name}-worktrees"
   worktree_dir="$worktrees_root/$worktree_slug"
 
-  if ! git -C "$repo_root" worktree list --porcelain | rg -q "^worktree $worktree_dir$"; then
+  tracked_path="$(
+    git -C "$repo_root" worktree list --porcelain | awk -v wt="$worktree_dir" '
+      $1=="worktree" && $2==wt { print $2; exit }
+    '
+  )"
+  tracked_branch="$(
+    git -C "$repo_root" worktree list --porcelain | awk -v br="refs/heads/$branch_name" '
+      $1=="worktree"{wt=$2; inwt=1; next}
+      $1=="branch" && inwt && $2==br { print wt; exit }
+      $0==""{inwt=0}
+    '
+  )"
+
+  if [ -z "$tracked_path" ] || [ -z "$tracked_branch" ] || [ "$tracked_path" != "$tracked_branch" ]; then
     echo "worktree not found: $worktree_dir" >&2
+    echo "hint: expected a tracked worktree for branch '$branch_name' at that path." >&2
     return 1
   fi
 
@@ -453,11 +477,12 @@ cxclose() {
 
   git worktree remove "$worktree_dir"
   git branch -d "$branch_name"
+  )
 }
 
 cxlist() {
   set -e
-  local repo_root repo_parent repo_name worktrees_root
+  local repo_root repo_parent repo_name worktrees_root list_output
 
   repo_root="$(git rev-parse --show-toplevel)"
   repo_parent="$(dirname "$repo_root")"
@@ -465,7 +490,7 @@ cxlist() {
   worktrees_root="$repo_parent/${repo_name}-worktrees"
 
   echo "codex worktrees under $worktrees_root:"
-  git -C "$repo_root" worktree list --porcelain | awk -v base="$worktrees_root/" '
+  list_output="$(git -C "$repo_root" worktree list --porcelain | awk -v base="$worktrees_root/" '
     $1=="worktree"{
       wt=$2; branch=""; head=""; locked=""; prunable=""
       next
@@ -483,5 +508,61 @@ cxlist() {
         printf "- %s | %s | %s\n", wt, branch, status
       }
     }
+  ')"
+  if [ -z "$list_output" ]; then
+    echo "no active codex worktrees."
+    return 0
+  fi
+  printf "%s\n" "$list_output"
+}
+
+cx_worktree_names() {
+  local repo_root repo_parent repo_name worktrees_root
+
+  if ! repo_root="$(git rev-parse --show-toplevel 2>/dev/null)"; then
+    return 0
+  fi
+  repo_parent="$(dirname "$repo_root")"
+  repo_name="$(basename "$repo_root")"
+  worktrees_root="$repo_parent/${repo_name}-worktrees"
+
+  git -C "$repo_root" worktree list --porcelain | awk -v base="$worktrees_root/" '
+    $1=="worktree"{wt=$2; branch=""; inwt=1; next}
+    $1=="branch" && inwt{branch=$2; next}
+    $0==""{
+      if (index(wt, base)==1 && branch ~ /^refs\/heads\//) {
+        sub(/^refs\/heads\//, "", branch)
+        print branch
+      }
+      inwt=0
+    }
   '
 }
+
+if [ -n "${ZSH_VERSION-}" ]; then
+  _cxclose_complete() {
+    local -a worktrees
+    worktrees=("${(@f)$(cx_worktree_names)}")
+    if (( ${#worktrees[@]} > 0 )); then
+      compadd -- "${worktrees[@]}"
+    fi
+  }
+
+  _cxclose() {
+    _arguments '1:worktree name:_cxclose_complete'
+  }
+
+  if typeset -f compdef >/dev/null 2>&1; then
+    compdef _cxclose cxclose
+  fi
+fi
+
+if [ -n "${BASH_VERSION-}" ]; then
+  _cxclose_bash_complete() {
+    local cur options
+    cur="${COMP_WORDS[COMP_CWORD]}"
+    options="$(cx_worktree_names | tr '\n' ' ')"
+    COMPREPLY=($(compgen -W "$options" -- "$cur"))
+  }
+  complete -F _cxclose_bash_complete cxclose 2>/dev/null || true
+fi
