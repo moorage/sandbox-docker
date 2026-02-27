@@ -410,7 +410,7 @@ cxhere() {
 cxclose() {
   # Run in a subshell so command failures can't terminate the caller's shell.
   ( set -e
-  local repo_root repo_parent repo_name worktrees_root branch_name worktree_dir worktree_slug git_dir
+  local repo_root repo_parent repo_name worktrees_root branch_name worktree_dir worktree_slug git_dir git_common_dir
   local status_output locked_line tracked_path tracked_branch
 
   if [ -z "$1" ]; then
@@ -418,10 +418,11 @@ cxclose() {
     return 2
   fi
 
-  if ! repo_root="$(git rev-parse --show-toplevel 2>/dev/null)"; then
+  if ! git_common_dir="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"; then
     echo "not inside a git repository; run cxclose from the main repo or a worktree." >&2
     return 1
   fi
+  repo_root="$(dirname "$git_common_dir")"
   branch_name="$1"
   worktree_slug="${branch_name//\//__}"
   repo_parent="$(dirname "$repo_root")"
@@ -475,8 +476,8 @@ cxclose() {
     return 1
   fi
 
-  git worktree remove "$worktree_dir"
-  git branch -d "$branch_name"
+  git -C "$repo_root" worktree remove "$worktree_dir"
+  git -C "$repo_root" branch -d "$branch_name"
   )
 }
 

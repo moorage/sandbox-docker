@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-02-24
+- Fixed `cxclose` when run from inside a tracked worktree:
+  - Resolve the main repo root via `git rev-parse --git-common-dir` instead of the current worktree top-level path.
+  - Run `git worktree remove` and `git branch -d` with `-C <main-repo-root>` for consistent behavior.
+
 ## 2026-02-23
 - Hardened `cxclose` error behavior:
   - Run in a subshell to avoid terminating the caller shell on failure.
