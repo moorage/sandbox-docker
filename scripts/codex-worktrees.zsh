@@ -481,6 +481,44 @@ cxclose() {
   )
 }
 
+cxkill() {
+  # Run in a subshell so command failures can't terminate the caller's shell.
+  ( set -e
+  local repo_root repo_parent repo_name worktrees_root branch_name worktree_dir worktree_slug
+  local matching_ids match_count
+
+  if [ -z "$1" ]; then
+    echo "usage: cxkill <worktree-name>" >&2
+    return 2
+  fi
+
+  repo_root="$(git rev-parse --show-toplevel)"
+  branch_name="$1"
+  worktree_slug="${branch_name//\//__}"
+  repo_parent="$(dirname "$repo_root")"
+  repo_name="$(basename "$repo_root")"
+  worktrees_root="$repo_parent/${repo_name}-worktrees"
+  worktree_dir="$worktrees_root/$worktree_slug"
+
+  matching_ids="$(
+    docker ps -q | while read -r id; do
+      if docker inspect -f '{{range .Mounts}}{{if eq .Type "bind"}}{{.Source}}{{"\n"}}{{end}}{{end}}' "$id" | rg -F -x "$worktree_dir"; then
+        echo "$id"
+      fi
+    done
+  )"
+
+  if [ -z "$matching_ids" ]; then
+    echo "no running containers found for worktree: $worktree_dir" >&2
+    return 0
+  fi
+
+  match_count="$(printf "%s\n" "$matching_ids" | wc -l | tr -d ' ')"
+  echo "stopping $match_count container(s) for worktree: $worktree_dir" >&2
+  docker stop $(printf "%s\n" "$matching_ids")
+  )
+}
+
 cxlist() {
   set -e
   local repo_root repo_parent repo_name worktrees_root list_output
@@ -553,8 +591,13 @@ if [ -n "${ZSH_VERSION-}" ]; then
     _arguments '1:worktree name:_cxclose_complete'
   }
 
+  _cxkill() {
+    _arguments '1:worktree name:_cxclose_complete'
+  }
+
   if typeset -f compdef >/dev/null 2>&1; then
     compdef _cxclose cxclose
+    compdef _cxkill cxkill
   fi
 fi
 
@@ -566,4 +609,5 @@ if [ -n "${BASH_VERSION-}" ]; then
     COMPREPLY=($(compgen -W "$options" -- "$cur"))
   }
   complete -F _cxclose_bash_complete cxclose 2>/dev/null || true
+  complete -F _cxclose_bash_complete cxkill 2>/dev/null || true
 fi
