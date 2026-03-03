@@ -410,8 +410,9 @@ cxhere() {
 cxclose() {
   # Run in a subshell so command failures can't terminate the caller's shell.
   ( set -e
-  local repo_root repo_parent repo_name worktrees_root branch_name worktree_dir worktree_slug git_dir git_common_dir
-  local status_output locked_line tracked_path tracked_branch
+  local repo_root repo_parent repo_name worktrees_root requested_name worktree_dir worktree_slug git_dir git_common_dir
+  local status_output locked_line tracked_path tracked_branch resolved_worktree resolved_branch
+  local candidate_count
 
   if [ -z "$1" ]; then
     echo "usage: cxclose <worktree-name>" >&2
@@ -423,45 +424,100 @@ cxclose() {
     return 1
   fi
   repo_root="$(dirname "$git_common_dir")"
-  branch_name="$1"
-  worktree_slug="${branch_name//\//__}"
+  requested_name="$1"
+  worktree_slug="${requested_name//\//__}"
   repo_parent="$(dirname "$repo_root")"
   repo_name="$(basename "$repo_root")"
   worktrees_root="$repo_parent/${repo_name}-worktrees"
   worktree_dir="$worktrees_root/$worktree_slug"
 
+  candidate_count="$(
+    git -C "$repo_root" worktree list --porcelain | awk -v base="$worktrees_root/" -v req="$requested_name" -v expected="$worktree_dir" '
+      $1=="worktree"{wt=$2; branch=""; inwt=1; next}
+      $1=="branch" && inwt{branch=$2; next}
+      $0==""{
+        if (index(wt, base)==1) {
+          b=branch
+          sub(/^refs\/heads\//, "", b)
+          n=wt
+          sub(/^.*\//, "", n)
+          if (wt==expected || wt==req || n==req || b==req) count++
+        }
+        inwt=0
+      }
+      END{print count+0}
+    '
+  )"
+
+  if [ "$candidate_count" -gt 1 ]; then
+    echo "multiple matching worktrees for '$requested_name'; be more specific." >&2
+    git -C "$repo_root" worktree list --porcelain | awk -v base="$worktrees_root/" -v req="$requested_name" -v expected="$worktree_dir" '
+      $1=="worktree"{wt=$2; branch=""; inwt=1; next}
+      $1=="branch" && inwt{branch=$2; next}
+      $0==""{
+        if (index(wt, base)==1) {
+          b=branch
+          sub(/^refs\/heads\//, "", b)
+          n=wt
+          sub(/^.*\//, "", n)
+          if (wt==expected || wt==req || n==req || b==req) {
+            printf "- %s | %s\n", wt, (b=="" ? "<detached>" : b)
+          }
+        }
+        inwt=0
+      }
+    '
+    return 1
+  fi
+
   tracked_path="$(
-    git -C "$repo_root" worktree list --porcelain | awk -v wt="$worktree_dir" '
-      $1=="worktree" && $2==wt { print $2; exit }
+    git -C "$repo_root" worktree list --porcelain | awk -v base="$worktrees_root/" -v req="$requested_name" -v expected="$worktree_dir" '
+      $1=="worktree"{wt=$2; branch=""; inwt=1; next}
+      $1=="branch" && inwt{branch=$2; next}
+      $0==""{
+        if (index(wt, base)==1) {
+          b=branch
+          sub(/^refs\/heads\//, "", b)
+          n=wt
+          sub(/^.*\//, "", n)
+          if (wt==expected || wt==req || n==req || b==req) {
+            print wt
+            exit
+          }
+        }
+        inwt=0
+      }
     '
   )"
   tracked_branch="$(
-    git -C "$repo_root" worktree list --porcelain | awk -v br="refs/heads/$branch_name" '
-      $1=="worktree"{wt=$2; inwt=1; next}
-      $1=="branch" && inwt && $2==br { print wt; exit }
+    git -C "$repo_root" worktree list --porcelain | awk -v wt="$tracked_path" '
+      $1=="worktree"{inwt=($2==wt); next}
+      inwt && $1=="branch"{print $2; exit}
       $0==""{inwt=0}
     '
   )"
 
-  if [ -z "$tracked_path" ] || [ -z "$tracked_branch" ] || [ "$tracked_path" != "$tracked_branch" ]; then
-    echo "worktree not found: $worktree_dir" >&2
-    echo "hint: expected a tracked worktree for branch '$branch_name' at that path." >&2
+  if [ -z "$tracked_path" ]; then
+    echo "worktree not found for: $requested_name" >&2
+    echo "hint: provide a codex worktree path, directory name, or branch name." >&2
     return 1
   fi
+  resolved_worktree="$tracked_path"
+  resolved_branch="${tracked_branch#refs/heads/}"
 
-  locked_line="$(git -C "$repo_root" worktree list --porcelain | awk -v wt="$worktree_dir" '
+  locked_line="$(git -C "$repo_root" worktree list --porcelain | awk -v wt="$resolved_worktree" '
     $1=="worktree"{inwt=($2==wt)}
     inwt && $1=="locked"{print $0}
   ')"
 
   if [ -n "$locked_line" ]; then
     echo "worktree is locked (busy): $locked_line" >&2
-    echo "hint: unlock it with: git worktree unlock \"$worktree_dir\"" >&2
+    echo "hint: unlock it with: git worktree unlock \"$resolved_worktree\"" >&2
     return 1
   fi
 
-  if git -C "$worktree_dir" rev-parse --git-dir >/dev/null 2>&1; then
-    git_dir="$(git -C "$worktree_dir" rev-parse --git-dir)"
+  if git -C "$resolved_worktree" rev-parse --git-dir >/dev/null 2>&1; then
+    git_dir="$(git -C "$resolved_worktree" rev-parse --git-dir)"
     if [ -f "$git_dir/index.lock" ] || [ -f "$git_dir/HEAD.lock" ]; then
       echo "worktree appears busy (git lock files present)." >&2
       echo "hint: ensure no git process or container is using it, then retry." >&2
@@ -469,15 +525,17 @@ cxclose() {
     fi
   fi
 
-  status_output="$(git -C "$worktree_dir" status --porcelain)"
+  status_output="$(git -C "$resolved_worktree" status --porcelain)"
   if [ -n "$status_output" ]; then
     echo "worktree has uncommitted changes; refusing to remove." >&2
     echo "hint: commit/stash changes or clean the worktree, then retry." >&2
     return 1
   fi
 
-  git -C "$repo_root" worktree remove "$worktree_dir"
-  git -C "$repo_root" branch -d "$branch_name"
+  git -C "$repo_root" worktree remove "$resolved_worktree"
+  if [ -n "$tracked_branch" ] && [ -n "$resolved_branch" ]; then
+    git -C "$repo_root" branch -d "$resolved_branch"
+  fi
   )
 }
 

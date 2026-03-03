@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-03-03
+- Fixed `cxclose` target resolution so it can close worktrees by directory name/path even when the tracked branch name differs.
+- Updated `cxclose` to delete the resolved tracked branch (when present) instead of assuming the user argument is the branch name.
+- Added ambiguity handling in `cxclose` to fail with matching candidates when an argument matches multiple codex worktrees.
+
 ## 2026-02-24
 - Fixed `cxclose` when run from inside a tracked worktree:
   - Resolve the main repo root via `git rev-parse --git-common-dir` instead of the current worktree top-level path.
