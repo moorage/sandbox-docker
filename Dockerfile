@@ -7,6 +7,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   ripgrep jq \
   xvfb xauth \
   && rm -rf /var/lib/apt/lists/*
+RUN ln -s /usr/bin/python3 /usr/local/bin/python
 
 # Codex CLI (npm package)
 ARG NPM_CACHEBUST=1
