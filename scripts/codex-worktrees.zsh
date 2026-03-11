@@ -31,6 +31,9 @@ cxhere() {
   local -a docker_security_opts
   local gh_config_dir use_gh
   local -a gh_config_arg
+  local ngrok_config_dir use_ngrok
+  local -a ngrok_config_arg
+  local ngrok_mount_target
   local codex_config codex_config_dir add_workspace_trust
   local use_docker
   local pids_limit
@@ -67,6 +70,10 @@ cxhere() {
   use_gh=1
   gh_config_dir="$HOME/.config/gh"
   gh_config_arg=()
+  use_ngrok=1
+  ngrok_config_dir=""
+  ngrok_config_arg=()
+  ngrok_mount_target="/tmp/ngrok-home/.config/ngrok"
   docker_resource_opts=()
   repo_root_mount="$repo_root"
   repo_git_mount="$repo_root/.git"
@@ -88,6 +95,19 @@ cxhere() {
   case "${CXHERE_GH:-1}" in
     0|false|FALSE|no|NO|n|N) use_gh=0 ;;
   esac
+  case "${CXHERE_NGROK:-1}" in
+    0|false|FALSE|no|NO|n|N) use_ngrok=0 ;;
+  esac
+
+  if [ -n "${CXHERE_NGROK_CONFIG_DIR:-}" ]; then
+    ngrok_config_dir="${CXHERE_NGROK_CONFIG_DIR%/}"
+  elif [ -d "$HOME/.config/ngrok" ]; then
+    ngrok_config_dir="$HOME/.config/ngrok"
+  elif [ -d "$HOME/Library/Application Support/ngrok" ]; then
+    ngrok_config_dir="$HOME/Library/Application Support/ngrok"
+  elif [ -d "$HOME/.ngrok2" ]; then
+    ngrok_config_dir="$HOME/.ngrok2"
+  fi
 
   codex_workspace_trust_present() {
     [ -f "$codex_config" ] || return 1
@@ -385,6 +405,13 @@ cxhere() {
         echo "warning: gh config not found at $gh_config_dir; skipping gh mount" >&2
       fi
 	    fi
+    if [ "$use_ngrok" -eq 1 ]; then
+      if [ -n "$ngrok_config_dir" ] && [ -f "$ngrok_config_dir/ngrok.yml" ]; then
+        ngrok_config_arg=(-v "$ngrok_config_dir":"$ngrok_mount_target":rw)
+      elif [ -n "$ngrok_config_dir" ]; then
+        echo "warning: ngrok config not found at $ngrok_config_dir/ngrok.yml; skipping ngrok mount" >&2
+      fi
+    fi
 	    docker run --rm -it \
 	      --init \
 	      --ipc=host \
@@ -401,6 +428,7 @@ cxhere() {
 	      -v "$HOME/.gitconfig":/home/codex/.gitconfig:ro \
 	      -v "$HOME/.codex":/home/codex/.codex:rw \
 	      "${gh_config_arg[@]}" \
+	      "${ngrok_config_arg[@]}" \
 	      "${env_file_arg[@]}" \
 	      -e CODEX_HOME=/home/codex/.codex \
 	      -e NPM_CONFIG_CACHE=/home/codex/.npm \

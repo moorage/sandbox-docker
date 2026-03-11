@@ -69,6 +69,13 @@ Disable it with:
 CXHERE_GH=0 cxhere mpm/my-feature
 ```
 
+By default `cxhere` also looks for an existing host ngrok config and mounts it into Docker sessions under `/tmp/ngrok-home` so `ngrok` reuses your saved authtoken and tunnel config. Disable or override that detection with:
+
+```bash
+CXHERE_NGROK=0 cxhere mpm/my-feature
+CXHERE_NGROK_CONFIG_DIR="$HOME/Library/Application Support/ngrok" cxhere mpm/my-feature
+```
+
 Cleanup when you're done:
 
 ```bash
@@ -109,6 +116,8 @@ Example paths:
 - After creating or reusing a worktree, `cxhere` checks for `.agent/PLANS.md` and offers to create it from the project template if missing.
 - Before launching Docker, `cxhere` checks for `$CODEX_HOME/AGENTS.md` and offers to create it from the global template if missing.
 - In Docker mode, `cxhere` mounts the main repo at its original absolute path as read-only, and mounts only `<repo>/.git` read-write. This lets git worktree metadata function while preventing writes to the main non-worktree files.
+- In Docker mode, `cxhere` mounts the first matching host ngrok config directory from `CXHERE_NGROK_CONFIG_DIR`, `~/.config/ngrok`, `~/Library/Application Support/ngrok`, or `~/.ngrok2` into `/tmp/ngrok-home/.config/ngrok`, and the image's `ngrok` wrapper uses that path as its default config file.
 - The Docker image includes `xvfb-run`, so Playwright can launch headless browsers via `xvfb-run` if needed.
+- The Docker image includes the `ngrok` CLI.
 - The Docker image now boots an internal PulseAudio server with a null sink, keeps its runtime/config state under `/tmp`, waits for it to become reachable, and exports `PULSE_SERVER`, `HARNESS_CAPTURE_WITH_FFMPEG=1`, and `HARNESS_CAPTURE_AUDIO_FORMAT=pulse` so ffmpeg-based Playwright screencasts can include browser audio by default.
 - If Docker is not running or the daemon is unreachable, `cxhere` will surface the Docker error output and exit non-zero.

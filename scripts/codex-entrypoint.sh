@@ -60,23 +60,47 @@ wait_for_pactl() {
   return 1
 }
 
+write_pulse_client_config() {
+  cat >"$PULSE_CLIENTCONFIG" <<EOF
+default-server = $PULSE_SERVER
+cookie-file = $PULSE_COOKIE
+autospawn = no
+daemon-binary = /bin/true
+enable-shm = false
+EOF
+}
+
 start_pulseaudio() {
   local pulse_socket="$1"
   local pulse_runtime_dir
+  local pulse_pid
 
   pulse_runtime_dir="$(dirname "$pulse_socket")"
 
   # If a previous daemon died uncleanly, clear the stale socket/pid pair before restarting.
   rm -f "$pulse_socket" "$pulse_runtime_dir/pid"
 
+  : > /tmp/pulseaudio.log
   pulseaudio \
-    --daemonize=yes \
+    --daemonize=no \
     --disallow-exit=yes \
     --exit-idle-time=-1 \
     --log-level=error \
     --log-target=stderr \
     --use-pid-file=no \
-    >/tmp/pulseaudio.log 2>&1
+    >/tmp/pulseaudio.log 2>&1 &
+  pulse_pid=$!
+
+  # `pulseaudio --daemonize=yes` can report a generic startup failure in containers.
+  # Running it in the foreground under shell supervision is more reliable and keeps
+  # the detailed daemon log available in /tmp/pulseaudio.log for diagnosis.
+  sleep 0.2
+  if ! kill -0 "$pulse_pid" 2>/dev/null; then
+    wait "$pulse_pid"
+    return 1
+  fi
+
+  return 0
 }
 
 find_monitor_source() {
@@ -103,6 +127,9 @@ if [ "${CODEX_DISABLE_PULSEAUDIO:-}" != "1" ]; then
     fi
 
     export PULSE_SERVER="unix:$pulse_socket"
+    if ! write_pulse_client_config; then
+      echo "warning: failed to write PulseAudio client config at $PULSE_CLIENTCONFIG" >&2
+    fi
 
     if ! wait_for_pactl 1 0; then
       if ! start_pulseaudio "$pulse_socket"; then

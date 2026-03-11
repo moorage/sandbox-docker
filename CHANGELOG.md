@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-03-11
+- Added `ngrok` to the Docker image so it is available in Codex Docker sessions without extra per-container setup.
+- Updated `cxhere` to mount an existing host ngrok config directory into `/tmp/ngrok-home/.config/ngrok`, and added an `ngrok` wrapper that uses that path as the default config file so host auth and tunnel definitions persist across runs.
+
 ## 2026-03-10
 - Added PulseAudio to the Docker image and container startup so Playwright sessions can route browser audio through an internal null sink.
 - Updated `cxhere` to export Pulse/ffmpeg capture defaults for Docker sessions, enabling full audio+video screencast recording without manual per-container setup.
@@ -7,6 +11,7 @@
 - Switched PulseAudio health checks from `pulseaudio --check` to `pactl`, since the former can report failure even when the server is reachable in this container setup.
 - Moved PulseAudio home/config/cookie paths under `/tmp` so Codex shell commands do not hit permission errors under `/home/codex` when they need to inspect or bootstrap audio.
 - Updated `cxhere` to replace an already-running worktree container when `codex-cli:local` has been rebuilt, so existing worktrees pick up the latest image instead of reusing stale runtime state.
+- Changed PulseAudio startup to run under entrypoint supervision instead of PulseAudio's own daemonization path, which avoids generic container startup failures and preserves detailed logs under `/tmp/pulseaudio.log`.
 
 ## 2026-03-09
 - Added R to the Docker image from CRAN's official Ubuntu `noble-cran40` repository and installed `r-base` plus `r-base-dev`.
