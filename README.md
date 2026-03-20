@@ -103,8 +103,8 @@ With shell completion enabled, `cxhere`, `cxclose`, and `cxkill` autocomplete kn
 | `CXHERE_GH` | `1` | Containerized sessions | Mounts `~/.config/gh`. Also forwards `GH_TOKEN`, `GITHUB_TOKEN`, or `gh auth token` when available. |
 | `GH_TOKEN` / `GITHUB_TOKEN` | unset | Containerized sessions | Preferred GitHub token source forwarded into the session before falling back to `gh auth token`. |
 | `CXHERE_SSH` | `1` | Containerized sessions | Mounts host `~/.ssh` read-only into the session. |
-| `CXHERE_SSH_AGENT` | `1` | Containerized sessions | Forwards `SSH_AUTH_SOCK` to `/tmp/ssh-agent.sock` when the host exposes a socket. |
-| `SSH_AUTH_SOCK` | host-dependent | Containerized sessions | Used as the source socket for agent forwarding when `CXHERE_SSH_AGENT=1`. |
+| `CXHERE_SSH_AGENT` | `1` | Containerized sessions | Forwards the host ssh-agent when the host exposes a socket. Docker uses a bind-mounted socket; Apple `container` uses native `--ssh` forwarding. |
+| `SSH_AUTH_SOCK` | host-dependent | Containerized sessions | Used as the host-side source socket for agent forwarding when `CXHERE_SSH_AGENT=1`. |
 | `CXHERE_NGROK` | `1` | Containerized sessions | Mounts the detected host ngrok config into the session. |
 | `CXHERE_NGROK_CONFIG_DIR` | auto-detect | Containerized sessions | Overrides ngrok config discovery. Checked paths are `~/.config/ngrok`, `~/Library/Application Support/ngrok`, and `~/.ngrok2`. |
 
@@ -115,6 +115,7 @@ With shell completion enabled, `cxhere`, `cxclose`, and `cxkill` autocomplete kn
 | `CXHERE_CONTAINER_CPUS` | `4` | Apple `container` sessions | Sets the VM CPU allocation. |
 | `CXHERE_CONTAINER_MEMORY` | `4G` | Apple `container` sessions | Sets the VM memory allocation. |
 | `CXHERE_CONTAINER_XVFB_SCREEN` | `1280x720x24` | Apple `container` sessions | Default headed display size when `XVFB_SCREEN` is not set. |
+| `CXHERE_CONTAINER_REPO_ROOT_MODE` | `rw` | Apple `container` sessions | Mount mode for the host repo root at its absolute path. Leave this at `rw` for Git worktree compatibility. |
 | `XVFB_SCREEN` | runtime-specific | Containerized sessions | Overrides the display size directly for one run. Docker defaults to `1920x1080x24`; Apple `container` defaults to `1280x720x24`. |
 | `CXHERE_PIDS_LIMIT` | `2048` | Docker sessions | Passed as Docker `--pids-limit`. |
 | `CXHERE_TMPFS_TMP_SIZE` | `2g` | Docker sessions | Size of the Docker `/tmp` tmpfs mount. |
@@ -147,7 +148,9 @@ With shell completion enabled, `cxhere`, `cxclose`, and `cxkill` autocomplete kn
 ## Files, Mounts, And Prompts
 
 - Containerized sessions mount the worktree at `/workspace`.
-- Containerized sessions also mount the main repo path read-only and `<repo>/.git` read-write so git worktree metadata still works.
+- Docker sessions also mount the main repo path read-only and `<repo>/.git` read-write so git worktree metadata still works.
+- Apple `container` sessions instead mount the full main repo path read-write at its host absolute path so Git worktree metadata resolves without relying on nested bind mounts.
+- Docker sessions forward the host ssh-agent by bind-mounting the socket. Apple `container` sessions use the runtime's native `--ssh` forwarding instead.
 - `~/.gitconfig` and `~/.codex` are mounted into containerized sessions by default.
 - Root-level `.env*` files from the main repo are copied into the worktree when it is created. If present, `.env.cx.local` is passed to the session as an env file.
 - `cxhere` offers to create `docs/PLANS.md` from the project template when it is missing.

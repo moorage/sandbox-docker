@@ -1,3 +1,6 @@
 .worktrees/
 .build-cachebust*
 .env*
+.build-cachebust
+seccomp_profile.json
+.pw-browsers

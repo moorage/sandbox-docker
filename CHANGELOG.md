@@ -1,6 +1,8 @@
 # Changelog
 
 ## 2026-03-20
+- Switched Apple `container` sessions from a raw `SSH_AUTH_SOCK` bind mount to native `container run --ssh` forwarding, which keeps the host ssh-agent usable as the non-root `codex` user for Git-over-SSH operations like pushing to GitHub.
+- Changed Apple `container` sessions to mount the full host repo root at its recorded absolute path instead of relying on a read-only repo mount plus nested `.git` bind mount, which restores Git worktree metadata resolution inside Apple-native containers.
 - Rebuilt `Dockerfile` on top of baseline `ubuntu:25.10` instead of `mcr.microsoft.com/playwright`, pinned Node.js to `25.8.1`, reconciled the Ubuntu 25.10 package renames needed for Playwright support, and validated the image under Apple's `container` runtime.
 - Set `PLAYWRIGHT_BROWSERS_PATH=/workspace/.pw-browsers` in the image so Playwright browser binaries stay project-local instead of being baked into the shared container image.
 - Switched `r-base` and `r-base-dev` to the Ubuntu 25.10 archive because CRAN does not currently publish a `questing-cran40` apt repository.

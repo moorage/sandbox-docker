@@ -51,6 +51,7 @@ cxhere() {
   local ssh_agent_sock use_ssh_agent
   local -a ssh_agent_arg
   local -a ssh_agent_env_arg
+  local -a container_ssh_agent_arg
   local ssh_mount_target ssh_agent_mount_target
   local ngrok_config_dir use_ngrok
   local -a ngrok_config_arg
@@ -61,6 +62,7 @@ cxhere() {
   local tmpfs_home_size
   local shm_size
   local repo_root_mount repo_git_mount
+  local container_repo_root_mount_mode
   local -a docker_resource_opts
   local matching_ids other_matching_ids
   local match_count
@@ -109,6 +111,7 @@ cxhere() {
   ssh_agent_sock="${SSH_AUTH_SOCK:-}"
   ssh_agent_arg=()
   ssh_agent_env_arg=()
+  container_ssh_agent_arg=()
   ssh_mount_target="/home/codex/.ssh"
   ssh_agent_mount_target="/tmp/ssh-agent.sock"
   use_ngrok=1
@@ -118,6 +121,7 @@ cxhere() {
   docker_resource_opts=()
   repo_root_mount="$repo_root"
   repo_git_mount="$repo_root/.git"
+  container_repo_root_mount_mode="ro"
   runtime_label_args=()
   runtime="$(cx_detect_runtime)" || return 1
   local_mode=0
@@ -554,9 +558,17 @@ cxhere() {
   elif [ "$runtime" = "container" ]; then
     # Apple's runtime launches each container in its own VM, so start with a lighter
     # default display size and explicit VM resources. Users can still override both.
+    # Mount the full repo root read-write at its host absolute path so Git worktree
+    # metadata keeps resolving without relying on nested bind mount override behavior.
+    # Use the runtime's native SSH agent forwarding instead of a raw socket bind mount:
+    # the launchd socket path is not reliably usable by the non-root container user.
     container_cpus="${CXHERE_CONTAINER_CPUS:-4}"
     container_memory="${CXHERE_CONTAINER_MEMORY:-4G}"
     container_xvfb_screen="${CXHERE_CONTAINER_XVFB_SCREEN:-1280x720x24}"
+    container_repo_root_mount_mode="${CXHERE_CONTAINER_REPO_ROOT_MODE:-rw}"
+    if [ "$use_ssh_agent" -eq 1 ] && [ -n "$ssh_agent_sock" ] && [ -S "$ssh_agent_sock" ]; then
+      container_ssh_agent_arg=(--ssh)
+    fi
 
     container run --remove --interactive --tty \
       --init \
@@ -568,14 +580,13 @@ cxhere() {
       --tmpfs /tmp \
       --tmpfs /home/codex \
       --volume "$worktree_dir:/workspace:rw" \
-      --volume "$repo_root_mount:$repo_root_mount:ro" \
-      --volume "$repo_git_mount:$repo_git_mount:rw" \
+      --volume "$repo_root_mount:$repo_root_mount:$container_repo_root_mount_mode" \
       --volume "$HOME/.gitconfig:/home/codex/.gitconfig:ro" \
       --volume "$HOME/.codex:/home/codex/.codex:rw" \
       "${gh_config_arg[@]}" \
       "${gh_token_arg[@]}" \
       "${ssh_dir_arg[@]}" \
-      "${ssh_agent_arg[@]}" \
+      "${container_ssh_agent_arg[@]}" \
       "${ngrok_config_arg[@]}" \
       "${env_file_arg[@]}" \
       --env CODEX_HOME=/home/codex/.codex \
@@ -591,7 +602,6 @@ cxhere() {
       --env "PULSE_SERVER=${PULSE_SERVER:-unix:/tmp/xdg-runtime/pulse/native}" \
       --env PULSE_COOKIE=/tmp/xdg-runtime/pulse/cookie \
       --env PULSE_CLIENTCONFIG=/tmp/xdg-runtime/pulse/client.conf \
-      "${ssh_agent_env_arg[@]}" \
       --env "HARNESS_CAPTURE_WITH_FFMPEG=${HARNESS_CAPTURE_WITH_FFMPEG:-1}" \
       --env "HARNESS_CAPTURE_AUDIO_FORMAT=${HARNESS_CAPTURE_AUDIO_FORMAT:-pulse}" \
       --workdir /workspace \
