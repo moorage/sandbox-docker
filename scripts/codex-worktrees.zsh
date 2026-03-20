@@ -1,17 +1,31 @@
 #!/usr/bin/env zsh
 
+if [ -n "${ZSH_VERSION-}" ]; then
+  CXHERE_SCRIPT_SOURCE="${(%):-%N}"
+elif [ -n "${BASH_SOURCE[0]-}" ]; then
+  CXHERE_SCRIPT_SOURCE="${BASH_SOURCE[0]}"
+else
+  CXHERE_SCRIPT_SOURCE="$0"
+fi
+CXHERE_SCRIPT_DIR="$(cd "$(dirname "$CXHERE_SCRIPT_SOURCE")" && pwd)"
+
+# shellcheck source=./cx-runtime-lib.sh
+. "$CXHERE_SCRIPT_DIR/cx-runtime-lib.sh"
+
 cxhere() {
   # Run in a subshell so `set -e` can't terminate the caller's shell.
   # This avoids zsh exiting entirely when a command fails.
   ( set -e
   if [ -z "$1" ]; then
     echo "usage: cxhere <worktree-name> [session-id]" >&2
-    echo "env: CXHERE_NO_DOCKER=1 to run codex locally without docker" >&2
+    echo "env: CXHERE_RUNTIME=auto|container|docker|local (CXHERE_NO_DOCKER=1 is a legacy alias for local)" >&2
     return 2
   fi
 
   local branch_name worktree_slug repo_root repo_parent repo_name worktrees_root worktree_dir
   local session_id
+  local runtime other_runtime local_mode
+  local image_name
   local -a codex_args
   local plans_url plans_path create_plans
   local agents_url agents_path create_agents
@@ -42,13 +56,22 @@ cxhere() {
   local -a ngrok_config_arg
   local ngrok_mount_target
   local codex_config codex_config_dir add_workspace_trust
-  local use_docker
   local pids_limit
   local tmpfs_tmp_size
   local tmpfs_home_size
   local shm_size
   local repo_root_mount repo_git_mount
   local -a docker_resource_opts
+  local matching_ids other_matching_ids
+  local match_count
+  local running_container_id
+  local running_image_id
+  local local_image_id
+  local -a runtime_label_args
+  local container_cpus
+  local container_memory
+  local container_xvfb_screen
+
   repo_root="$(git rev-parse --show-toplevel)"
   branch_name="$1"
   session_id="$2"
@@ -57,6 +80,7 @@ cxhere() {
   repo_name="$(basename "$repo_root")"
   worktrees_root="$repo_parent/${repo_name}-worktrees"
   worktree_dir="$worktrees_root/$worktree_slug"
+  image_name="codex-cli:local"
   plans_url="https://raw.githubusercontent.com/moorage/sandbox-docker/refs/heads/main/PLANS.example.project.md"
   plans_path="$worktree_dir/docs/PLANS.md"
   agents_url="https://raw.githubusercontent.com/moorage/sandbox-docker/refs/heads/main/AGENTS.example.global.md"
@@ -73,7 +97,6 @@ cxhere() {
   env_file_arg=()
   seccomp_profile="$repo_root/seccomp_profile.json"
   docker_security_opts=(--security-opt=no-new-privileges)
-  use_docker=1
   use_gh=1
   gh_config_dir="$HOME/.config/gh"
   gh_token=""
@@ -95,6 +118,9 @@ cxhere() {
   docker_resource_opts=()
   repo_root_mount="$repo_root"
   repo_git_mount="$repo_root/.git"
+  runtime_label_args=()
+  runtime="$(cx_detect_runtime)" || return 1
+  local_mode=0
 
   # Defaults tuned for running Playwright (headed Chromium) alongside a Node server.
   # These are all overrideable via env vars for tighter/looser setups.
@@ -107,9 +133,10 @@ cxhere() {
   docker_resource_opts+=(--ulimit "nproc=${CXHERE_ULIMIT_NPROC:-8192}:${CXHERE_ULIMIT_NPROC:-8192}")
   docker_resource_opts+=(--ulimit "nofile=${CXHERE_ULIMIT_NOFILE:-1048576}:${CXHERE_ULIMIT_NOFILE:-1048576}")
 
-  case "${CXHERE_NO_DOCKER:-}" in
-    1|true|TRUE|yes|YES|y|Y) use_docker=0 ;;
-  esac
+  if [ "$runtime" = "local" ]; then
+    local_mode=1
+  fi
+
   case "${CXHERE_GH:-1}" in
     0|false|FALSE|no|NO|n|N) use_gh=0 ;;
   esac
@@ -131,6 +158,11 @@ cxhere() {
     ngrok_config_dir="$HOME/Library/Application Support/ngrok"
   elif [ -d "$HOME/.ngrok2" ]; then
     ngrok_config_dir="$HOME/.ngrok2"
+  fi
+
+  if [ "$local_mode" -eq 0 ]; then
+    cx_require_runtime "$runtime"
+    cx_require_local_image "$runtime" "$image_name"
   fi
 
   codex_workspace_trust_present() {
@@ -187,27 +219,6 @@ cxhere() {
     fi
   }
 
-  docker_find_worktree_containers() {
-    local match_ids
-    match_ids="$(
-      docker ps -q | while read -r id; do
-        if docker inspect -f '{{range .Mounts}}{{if eq .Type "bind"}}{{.Source}}{{"\n"}}{{end}}{{end}}' "$id" | rg -F -x "$worktree_dir"; then
-          echo "$id"
-        fi
-      done
-    )"
-    printf "%s\n" "$match_ids"
-  }
-
-  docker_local_image_id() {
-    docker image inspect -f '{{.Id}}' codex-cli:local 2>/dev/null || true
-  }
-
-  docker_container_image_id() {
-    local container_id="$1"
-    docker inspect -f '{{.Image}}' "$container_id" 2>/dev/null || true
-  }
-
   if [[ "$playwright_browsers_path" == /workspace/* ]]; then
     playwright_browsers_rel="${playwright_browsers_path#/workspace/}"
     if [ -n "$playwright_browsers_rel" ]; then
@@ -225,57 +236,75 @@ cxhere() {
     fi
   fi
 
-  if [ -f "$seccomp_profile_example" ] && [ ! -f "$seccomp_profile_target" ]; then
-    printf "%s" "Copy seccomp profile to $seccomp_profile_target? [y/N] " >&2
-    IFS= read -r create_seccomp_profile
-    if [[ "$create_seccomp_profile" == [yY]* ]]; then
-      cp "$seccomp_profile_example" "$seccomp_profile_target"
-      echo "created $seccomp_profile_target"
+  if [ "$runtime" = "docker" ]; then
+    if [ -f "$seccomp_profile_example" ] && [ ! -f "$seccomp_profile_target" ]; then
+      printf "%s" "Copy seccomp profile to $seccomp_profile_target? [y/N] " >&2
+      IFS= read -r create_seccomp_profile
+      if [[ "$create_seccomp_profile" == [yY]* ]]; then
+        cp "$seccomp_profile_example" "$seccomp_profile_target"
+        echo "created $seccomp_profile_target"
+      fi
     fi
-  fi
 
-  if [ ! -f "$repo_gitignore_path" ]; then
-    printf "%s" "Create $repo_gitignore_path and ignore seccomp_profile.json? [y/N] " >&2
-    IFS= read -r add_seccomp_ignore
-    if [[ "$add_seccomp_ignore" == [yY]* ]]; then
-      printf "%s\n" "seccomp_profile.json" > "$repo_gitignore_path"
-      echo "created $repo_gitignore_path with seccomp_profile.json ignore"
-    fi
-  elif ! rg -q '^[[:space:]]*seccomp_profile\.json([[:space:]]*$|/)' "$repo_gitignore_path"; then
-    printf "%s" "Add seccomp_profile.json to $repo_gitignore_path? [y/N] " >&2
-    IFS= read -r add_seccomp_ignore
-    if [[ "$add_seccomp_ignore" == [yY]* ]]; then
-      printf "%s\n" "seccomp_profile.json" >> "$repo_gitignore_path"
-      echo "added seccomp_profile.json to $repo_gitignore_path"
+    if [ ! -f "$repo_gitignore_path" ]; then
+      printf "%s" "Create $repo_gitignore_path and ignore seccomp_profile.json? [y/N] " >&2
+      IFS= read -r add_seccomp_ignore
+      if [[ "$add_seccomp_ignore" == [yY]* ]]; then
+        printf "%s\n" "seccomp_profile.json" > "$repo_gitignore_path"
+        echo "created $repo_gitignore_path with seccomp_profile.json ignore"
+      fi
+    elif ! rg -q '^[[:space:]]*seccomp_profile\.json([[:space:]]*$|/)' "$repo_gitignore_path"; then
+      printf "%s" "Add seccomp_profile.json to $repo_gitignore_path? [y/N] " >&2
+      IFS= read -r add_seccomp_ignore
+      if [[ "$add_seccomp_ignore" == [yY]* ]]; then
+        printf "%s\n" "seccomp_profile.json" >> "$repo_gitignore_path"
+        echo "added seccomp_profile.json to $repo_gitignore_path"
+      fi
     fi
   fi
 
   mkdir -p "$worktrees_root"
   if git -C "$repo_root" worktree list --porcelain | rg -q "^worktree $worktree_dir$"; then
-    if [ "$use_docker" -eq 1 ]; then
-      local matching_ids
-      matching_ids="$(docker_find_worktree_containers)"
+    if [ "$local_mode" -eq 0 ]; then
+      matching_ids="$(cx_list_worktree_containers "$runtime" "$repo_root" "$worktree_dir" "$image_name" || true)"
+      other_runtime=""
+      other_matching_ids=""
+      case "$runtime" in
+        docker) other_runtime="container" ;;
+        container) other_runtime="docker" ;;
+      esac
+      if [ -n "$other_runtime" ] && cx_runtime_ready_silent "$other_runtime"; then
+        other_matching_ids="$(cx_list_worktree_containers "$other_runtime" "$repo_root" "$worktree_dir" "$image_name" || true)"
+      fi
+
+      if [ -n "$matching_ids" ] && [ -n "$other_matching_ids" ]; then
+        echo "containers are already running for worktree in both runtimes: $worktree_dir" >&2
+        echo "hint: run cxkill \"$branch_name\" to clean up stale sessions before retrying." >&2
+        return 1
+      fi
+
+      if [ -n "$other_matching_ids" ]; then
+        echo "$other_runtime container already running for worktree: $worktree_dir ($(printf "%s\n" "$other_matching_ids" | head -n1))" >&2
+        echo "hint: run cxkill \"$branch_name\" or set CXHERE_RUNTIME=$other_runtime to reuse that session." >&2
+        return 1
+      fi
 
       if [ -n "$matching_ids" ]; then
-        local match_count
-        local running_container_id
-        local running_image_id
-        local local_image_id
-        match_count="$(printf "%s\n" "$matching_ids" | wc -l | tr -d ' ')"
+        match_count="$(printf "%s\n" "$matching_ids" | sed '/^$/d' | wc -l | tr -d ' ')"
         if [ "$match_count" -gt 1 ]; then
-          echo "multiple containers running for worktree: $worktree_dir" >&2
+          echo "multiple $runtime containers running for worktree: $worktree_dir" >&2
           echo "example container: $(printf "%s\n" "$matching_ids" | head -n1)" >&2
           return 1
         fi
         running_container_id="$(printf "%s\n" "$matching_ids" | head -n1)"
-        running_image_id="$(docker_container_image_id "$running_container_id")"
-        local_image_id="$(docker_local_image_id)"
+        running_image_id="$(cx_container_image_identity "$runtime" "$running_container_id" || true)"
+        local_image_id="$(cx_local_image_identity "$runtime" "$image_name" || true)"
 
         if [ -n "$running_image_id" ] && [ -n "$local_image_id" ] && [ "$running_image_id" != "$local_image_id" ]; then
-          echo "replacing stale container for worktree: $worktree_dir ($running_container_id)" >&2
-          docker stop "$running_container_id" >/dev/null
+          echo "replacing stale $runtime container for worktree: $worktree_dir ($running_container_id)" >&2
+          cx_delete_runtime_containers "$runtime" "$running_container_id"
         else
-          echo "container already running for worktree: $worktree_dir ($running_container_id)" >&2
+          echo "$runtime container already running for worktree: $worktree_dir ($running_container_id)" >&2
           return 0
         fi
       fi
@@ -418,13 +447,17 @@ cxhere() {
     codex_args=(resume "$session_id")
   fi
 
-  if [ "$use_docker" -eq 1 ]; then
-    if [ -f "$seccomp_profile" ]; then
-	    docker_security_opts+=(--security-opt "seccomp=$seccomp_profile")
-	    fi
-	    if [ "$use_gh" -eq 1 ]; then
+  if [ "$local_mode" -eq 0 ]; then
+    runtime_label_args=(
+      --label "${CXHERE_LABEL_REPO_KEY}=${repo_root}"
+      --label "${CXHERE_LABEL_WORKTREE_KEY}=${worktree_dir}"
+      --label "${CXHERE_LABEL_IMAGE_KEY}=${image_name}"
+      --label "${CXHERE_LABEL_RUNTIME_KEY}=${runtime}"
+    )
+
+    if [ "$use_gh" -eq 1 ]; then
       if [ -d "$gh_config_dir" ]; then
-        gh_config_arg=(-v "$gh_config_dir":/home/codex/.config/gh:rw)
+        gh_config_arg=(--volume "$gh_config_dir:/home/codex/.config/gh:rw")
       else
         echo "warning: gh config not found at $gh_config_dir; skipping gh mount" >&2
       fi
@@ -438,75 +471,134 @@ cxhere() {
       fi
 
       if [ -n "$gh_token" ]; then
-        gh_token_arg=(-e GH_TOKEN="$gh_token")
+        gh_token_arg=(--env "GH_TOKEN=$gh_token")
       else
         echo "warning: no GitHub token available from GH_TOKEN, GITHUB_TOKEN, or gh auth token; container gh auth may be unavailable" >&2
       fi
-		    fi
+    fi
+
     if [ "$use_ssh" -eq 1 ]; then
       if [ -d "$ssh_dir" ]; then
-        ssh_dir_arg=(-v "$ssh_dir":"$ssh_mount_target":ro)
+        ssh_dir_arg=(--volume "$ssh_dir:$ssh_mount_target:ro")
       else
         echo "warning: ssh config not found at $ssh_dir; skipping ssh mount" >&2
       fi
     fi
+
     if [ "$use_ssh_agent" -eq 1 ] && [ -n "$ssh_agent_sock" ]; then
       if [ -S "$ssh_agent_sock" ]; then
-        ssh_agent_arg=(-v "$ssh_agent_sock":"$ssh_agent_mount_target")
-        ssh_agent_env_arg=(-e SSH_AUTH_SOCK="$ssh_agent_mount_target")
+        ssh_agent_arg=(--volume "$ssh_agent_sock:$ssh_agent_mount_target")
+        ssh_agent_env_arg=(--env "SSH_AUTH_SOCK=$ssh_agent_mount_target")
       else
         echo "warning: SSH_AUTH_SOCK is not a socket at $ssh_agent_sock; skipping ssh-agent mount" >&2
       fi
     fi
+
     if [ "$use_ngrok" -eq 1 ]; then
       if [ -n "$ngrok_config_dir" ] && [ -f "$ngrok_config_dir/ngrok.yml" ]; then
-        ngrok_config_arg=(-v "$ngrok_config_dir":"$ngrok_mount_target":rw)
+        ngrok_config_arg=(--volume "$ngrok_config_dir:$ngrok_mount_target:rw")
       elif [ -n "$ngrok_config_dir" ]; then
         echo "warning: ngrok config not found at $ngrok_config_dir/ngrok.yml; skipping ngrok mount" >&2
       fi
     fi
-	    docker run --rm -it \
-	      --init \
-	      --ipc=host \
-	      --user codex \
-	      --cap-drop=ALL \
-	      "${docker_security_opts[@]}" \
-	      "${docker_resource_opts[@]}" \
-	      --read-only \
-	      --tmpfs "/tmp:rw,noexec,nosuid,nodev,size=${tmpfs_tmp_size}" \
-	      --tmpfs "/home/codex:rw,noexec,nosuid,nodev,size=${tmpfs_home_size},uid=10001,gid=10001" \
-	      -v "$worktree_dir":/workspace:rw \
-	      -v "$repo_root_mount":"$repo_root_mount":ro \
-	      -v "$repo_git_mount":"$repo_git_mount":rw \
-		      -v "$HOME/.gitconfig":/home/codex/.gitconfig:ro \
-		      -v "$HOME/.codex":/home/codex/.codex:rw \
-		      "${gh_config_arg[@]}" \
-		      "${gh_token_arg[@]}" \
-		      "${ssh_dir_arg[@]}" \
-		      "${ssh_agent_arg[@]}" \
-	      "${ngrok_config_arg[@]}" \
-	      "${env_file_arg[@]}" \
-	      -e CODEX_HOME=/home/codex/.codex \
-	      -e GH_CONFIG_DIR=/home/codex/.config/gh \
-	      -e NPM_CONFIG_CACHE=/home/codex/.npm \
-	      -e TMPDIR=/tmp \
-	      -e HOME=/tmp/pulse-home \
-	      -e XDG_RUNTIME_DIR=/tmp/xdg-runtime \
-	      -e XDG_CONFIG_HOME=/tmp/pulse-home/.config \
-	      -e XDG_CACHE_HOME=/tmp/pulse-home/.cache \
-	      -e DISPLAY="${DISPLAY:-:99}" \
-	      -e XVFB_SCREEN="${XVFB_SCREEN:-1920x1080x24}" \
-	      -e PULSE_SERVER="${PULSE_SERVER:-unix:/tmp/xdg-runtime/pulse/native}" \
-	      -e PULSE_COOKIE=/tmp/xdg-runtime/pulse/cookie \
-	      -e PULSE_CLIENTCONFIG=/tmp/xdg-runtime/pulse/client.conf \
-	      "${ssh_agent_env_arg[@]}" \
-	      -e HARNESS_CAPTURE_WITH_FFMPEG="${HARNESS_CAPTURE_WITH_FFMPEG:-1}" \
-	      -e HARNESS_CAPTURE_AUDIO_FORMAT="${HARNESS_CAPTURE_AUDIO_FORMAT:-pulse}" \
-	      -w /workspace \
-	      codex-cli:local \
-	      "${codex_args[@]}" \
-	      --dangerously-bypass-approvals-and-sandbox \
-	      --search
+  fi
+
+  if [ "$runtime" = "docker" ]; then
+    if [ -f "$seccomp_profile" ]; then
+      docker_security_opts+=(--security-opt "seccomp=$seccomp_profile")
+    fi
+
+    docker run --rm -it \
+      --init \
+      --ipc=host \
+      --user codex \
+      --cap-drop=ALL \
+      "${runtime_label_args[@]}" \
+      "${docker_security_opts[@]}" \
+      "${docker_resource_opts[@]}" \
+      --read-only \
+      --tmpfs "/tmp:rw,noexec,nosuid,nodev,size=${tmpfs_tmp_size}" \
+      --tmpfs "/home/codex:rw,noexec,nosuid,nodev,size=${tmpfs_home_size},uid=10001,gid=10001" \
+      --volume "$worktree_dir:/workspace:rw" \
+      --volume "$repo_root_mount:$repo_root_mount:ro" \
+      --volume "$repo_git_mount:$repo_git_mount:rw" \
+      --volume "$HOME/.gitconfig:/home/codex/.gitconfig:ro" \
+      --volume "$HOME/.codex:/home/codex/.codex:rw" \
+      "${gh_config_arg[@]}" \
+      "${gh_token_arg[@]}" \
+      "${ssh_dir_arg[@]}" \
+      "${ssh_agent_arg[@]}" \
+      "${ngrok_config_arg[@]}" \
+      "${env_file_arg[@]}" \
+      --env CODEX_HOME=/home/codex/.codex \
+      --env GH_CONFIG_DIR=/home/codex/.config/gh \
+      --env NPM_CONFIG_CACHE=/home/codex/.npm \
+      --env TMPDIR=/tmp \
+      --env HOME=/tmp/pulse-home \
+      --env XDG_RUNTIME_DIR=/tmp/xdg-runtime \
+      --env XDG_CONFIG_HOME=/tmp/pulse-home/.config \
+      --env XDG_CACHE_HOME=/tmp/pulse-home/.cache \
+      --env "DISPLAY=${DISPLAY:-:99}" \
+      --env "XVFB_SCREEN=${XVFB_SCREEN:-1920x1080x24}" \
+      --env "PULSE_SERVER=${PULSE_SERVER:-unix:/tmp/xdg-runtime/pulse/native}" \
+      --env PULSE_COOKIE=/tmp/xdg-runtime/pulse/cookie \
+      --env PULSE_CLIENTCONFIG=/tmp/xdg-runtime/pulse/client.conf \
+      "${ssh_agent_env_arg[@]}" \
+      --env "HARNESS_CAPTURE_WITH_FFMPEG=${HARNESS_CAPTURE_WITH_FFMPEG:-1}" \
+      --env "HARNESS_CAPTURE_AUDIO_FORMAT=${HARNESS_CAPTURE_AUDIO_FORMAT:-pulse}" \
+      --workdir /workspace \
+      "$image_name" \
+      "${codex_args[@]}" \
+      --dangerously-bypass-approvals-and-sandbox \
+      --search
+  elif [ "$runtime" = "container" ]; then
+    # Apple's runtime launches each container in its own VM, so start with a lighter
+    # default display size and explicit VM resources. Users can still override both.
+    container_cpus="${CXHERE_CONTAINER_CPUS:-4}"
+    container_memory="${CXHERE_CONTAINER_MEMORY:-4G}"
+    container_xvfb_screen="${CXHERE_CONTAINER_XVFB_SCREEN:-1280x720x24}"
+
+    container run --remove --interactive --tty \
+      --init \
+      --user codex \
+      "${runtime_label_args[@]}" \
+      --cpus "$container_cpus" \
+      --memory "$container_memory" \
+      --read-only \
+      --tmpfs /tmp \
+      --tmpfs /home/codex \
+      --volume "$worktree_dir:/workspace:rw" \
+      --volume "$repo_root_mount:$repo_root_mount:ro" \
+      --volume "$repo_git_mount:$repo_git_mount:rw" \
+      --volume "$HOME/.gitconfig:/home/codex/.gitconfig:ro" \
+      --volume "$HOME/.codex:/home/codex/.codex:rw" \
+      "${gh_config_arg[@]}" \
+      "${gh_token_arg[@]}" \
+      "${ssh_dir_arg[@]}" \
+      "${ssh_agent_arg[@]}" \
+      "${ngrok_config_arg[@]}" \
+      "${env_file_arg[@]}" \
+      --env CODEX_HOME=/home/codex/.codex \
+      --env GH_CONFIG_DIR=/home/codex/.config/gh \
+      --env NPM_CONFIG_CACHE=/tmp/npm-cache \
+      --env TMPDIR=/tmp \
+      --env HOME=/tmp/pulse-home \
+      --env XDG_RUNTIME_DIR=/tmp/xdg-runtime \
+      --env XDG_CONFIG_HOME=/tmp/pulse-home/.config \
+      --env XDG_CACHE_HOME=/tmp/pulse-home/.cache \
+      --env "DISPLAY=${DISPLAY:-:99}" \
+      --env "XVFB_SCREEN=${XVFB_SCREEN:-$container_xvfb_screen}" \
+      --env "PULSE_SERVER=${PULSE_SERVER:-unix:/tmp/xdg-runtime/pulse/native}" \
+      --env PULSE_COOKIE=/tmp/xdg-runtime/pulse/cookie \
+      --env PULSE_CLIENTCONFIG=/tmp/xdg-runtime/pulse/client.conf \
+      "${ssh_agent_env_arg[@]}" \
+      --env "HARNESS_CAPTURE_WITH_FFMPEG=${HARNESS_CAPTURE_WITH_FFMPEG:-1}" \
+      --env "HARNESS_CAPTURE_AUDIO_FORMAT=${HARNESS_CAPTURE_AUDIO_FORMAT:-pulse}" \
+      --workdir /workspace \
+      "$image_name" \
+      "${codex_args[@]}" \
+      --dangerously-bypass-approvals-and-sandbox \
+      --search
   else
     if [ -f "$env_file" ]; then
       set -a
@@ -514,7 +606,7 @@ cxhere() {
       set +a
     fi
     if ! command -v codex >/dev/null 2>&1; then
-      echo "codex CLI not found in PATH; install it or enable Docker mode." >&2
+      echo "codex CLI not found in PATH; install it or use CXHERE_RUNTIME=container/docker." >&2
       return 1
     fi
     (cd "$worktree_dir" && codex "${codex_args[@]}" --dangerously-bypass-approvals-and-sandbox --search)
@@ -658,7 +750,11 @@ cxkill() {
   # Run in a subshell so command failures can't terminate the caller's shell.
   ( set -e
   local repo_root repo_parent repo_name worktrees_root branch_name worktree_dir worktree_slug
-  local matching_ids match_count
+  local image_name requested_runtime runtime
+  local -a runtimes runtime_ids
+  local matching_ids
+  local match_count
+  local total_count
 
   if [ -z "$1" ]; then
     echo "usage: cxkill <worktree-name>" >&2
@@ -672,23 +768,64 @@ cxkill() {
   repo_name="$(basename "$repo_root")"
   worktrees_root="$repo_parent/${repo_name}-worktrees"
   worktree_dir="$worktrees_root/$worktree_slug"
+  image_name="codex-cli:local"
+  requested_runtime="$(cx_requested_runtime)"
+  runtimes=()
 
-  matching_ids="$(
-    docker ps -q | while read -r id; do
-      if docker inspect -f '{{range .Mounts}}{{if eq .Type "bind"}}{{.Source}}{{"\n"}}{{end}}{{end}}' "$id" | rg -F -x "$worktree_dir"; then
-        echo "$id"
+  case "$requested_runtime" in
+    docker|container)
+      cx_require_runtime "$requested_runtime"
+      runtimes=("$requested_runtime")
+      ;;
+    auto|"")
+      if cx_runtime_ready_silent container; then
+        runtimes+=(container)
       fi
-    done
-  )"
+      if cx_runtime_ready_silent docker; then
+        runtimes+=(docker)
+      fi
+      ;;
+    local)
+      if cx_runtime_ready_silent container; then
+        runtimes+=(container)
+      fi
+      if cx_runtime_ready_silent docker; then
+        runtimes+=(docker)
+      fi
+      ;;
+    *)
+      echo "invalid CXHERE_RUNTIME: $requested_runtime" >&2
+      return 1
+      ;;
+  esac
 
-  if [ -z "$matching_ids" ]; then
+  if [ "${#runtimes[@]}" -eq 0 ]; then
+    echo "no ready container runtime found to inspect worktree sessions." >&2
+    return 1
+  fi
+
+  total_count=0
+  for runtime in "${runtimes[@]}"; do
+    matching_ids="$(cx_list_worktree_containers "$runtime" "$repo_root" "$worktree_dir" "$image_name" || true)"
+    [ -n "$matching_ids" ] || continue
+    runtime_ids=()
+    while IFS= read -r id; do
+      [ -n "$id" ] || continue
+      runtime_ids+=("$id")
+    done <<EOF
+$matching_ids
+EOF
+    match_count="${#runtime_ids[@]}"
+    [ "$match_count" -gt 0 ] || continue
+    total_count=$((total_count + match_count))
+    echo "stopping $match_count $runtime container(s) for worktree: $worktree_dir" >&2
+    cx_delete_runtime_containers "$runtime" "${runtime_ids[@]}"
+  done
+
+  if [ "$total_count" -eq 0 ]; then
     echo "no running containers found for worktree: $worktree_dir" >&2
     return 0
   fi
-
-  match_count="$(printf "%s\n" "$matching_ids" | wc -l | tr -d ' ')"
-  echo "stopping $match_count container(s) for worktree: $worktree_dir" >&2
-  docker stop $(printf "%s\n" "$matching_ids")
   )
 }
 

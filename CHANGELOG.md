@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-03-20
+- Rebuilt `Dockerfile` on top of baseline `ubuntu:25.10` instead of `mcr.microsoft.com/playwright`, pinned Node.js to `25.8.1`, reconciled the Ubuntu 25.10 package renames needed for Playwright support, and validated the image under Apple's `container` runtime.
+- Set `PLAYWRIGHT_BROWSERS_PATH=/workspace/.pw-browsers` in the image so Playwright browser binaries stay project-local instead of being baked into the shared container image.
+- Switched `r-base` and `r-base-dev` to the Ubuntu 25.10 archive because CRAN does not currently publish a `questing-cran40` apt repository.
+- Validated headed Playwright plus ffmpeg video and audio+video capture on the Ubuntu 25.10 image under both Apple `container` and Docker Desktop.
+- Added `docs/apple-container-migration.execplan.md` to capture the `apple/container` migration work, runtime detection, validation plan, and Docker fallback strategy.
+- Added `scripts/cx-runtime-lib.sh` and rewired `scripts/build-local.sh` plus `scripts/codex-worktrees.zsh` around `CX_BUILD_RUNTIME=auto|container|docker|all` and `CXHERE_RUNTIME=auto|container|docker|local`.
+- Changed runtime auto-detection to prefer a ready Apple `container` runtime on supported Macs, fall back to a ready Docker daemon when needed, and keep `CXHERE_NO_DOCKER=1` as a legacy alias for local mode.
+- Updated `cxhere` and `cxkill` to find worktree sessions by stable runtime-neutral labels across both engines, while preserving Docker bind-mount discovery for older unlabeled sessions.
+- Tuned Apple `container` launches for more reliable default recording by lowering the default `XVFB_SCREEN` to `1280x720x24` on that runtime and exposing `CXHERE_CONTAINER_CPUS`, `CXHERE_CONTAINER_MEMORY`, and `CXHERE_CONTAINER_XVFB_SCREEN` for overrides.
+- Rewrote `README.md` around the current Apple `container` plus Docker fallback workflow, removed stale Docker-only guidance, and consolidated the usage env vars into tables.
+
 ## 2026-03-16
 - Updated `cxhere` to forward a GitHub token into Docker sessions by preferring host `GH_TOKEN` or `GITHUB_TOKEN` and falling back to `gh auth token`, so containerized `gh` can reuse host auth even when the host stores credentials in the macOS keychain.
 

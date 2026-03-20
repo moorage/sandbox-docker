@@ -1,139 +1,173 @@
 # sandbox-docker
 
-This repo is what I currently use to sandbox my development environment for Codex CLI, shared in the spirit of openness. It runs Codex in a Docker container and mounts your repo and default Codex config.  It has helper flows that creates/cleans a dedicated git worktree and launches the container against it, to enable isolated parallel sessions.
+This repo runs Codex CLI inside a Linux container and gives each session its own git worktree, so you can run multiple Codex sessions against the same repo without sharing a checkout.
 
-## Build the Docker image
+## Runtime Model
+
+- `cxhere` and `./scripts/build-local.sh` support Apple `container`, Docker, and explicit local mode.
+- `auto` prefers a ready Apple `container` runtime on Apple silicon running macOS 26+, otherwise a ready Docker daemon.
+- Docker and Apple `container` use separate image stores. Build both with `CX_BUILD_RUNTIME=all` if you want instant fallback between them.
+- Apple `container` sessions default to a lighter `1280x720x24` headed display for more reliable Playwright + ffmpeg recording. Docker keeps `1920x1080x24`.
+
+## Prerequisites
+
+- `git`
+- Docker Desktop or Apple `container`
+- `codex` in `PATH` if you want `CXHERE_RUNTIME=local`
+- For Apple `container`: Apple silicon, macOS 26+, `container` installed, and `container system start`
+- Optional host config reused by sessions: `gh`, `~/.ssh`, `SSH_AUTH_SOCK`, `ngrok`
+
+## Build The Local Image
+
+The image tag is `codex-cli:local`.
 
 ```bash
 ./scripts/build-local.sh
 ```
 
-## Set up the shell shortcuts
+Typical build flows:
 
-Add this to your shell config:
+```bash
+container system start
+CX_BUILD_RUNTIME=container ./scripts/build-local.sh
+CX_BUILD_RUNTIME=docker ./scripts/build-local.sh
+CX_BUILD_RUNTIME=all ./scripts/build-local.sh
+```
+
+### Build Flags
+
+| Variable | Default | Applies to | Effect |
+| --- | --- | --- | --- |
+| `CX_BUILD_RUNTIME` | `auto` | `./scripts/build-local.sh` | Selects `container`, `docker`, or `all`. `auto` prefers a ready Apple runtime, then a ready Docker daemon. |
+| `CX_BUILD_CPUS` | unset | Apple `container` builds | Passed through as `container build --cpus`. |
+| `CX_BUILD_MEMORY` | unset | Apple `container` builds | Passed through as `container build --memory`. |
+
+## Shell Setup
+
+Source the helper script from your shell config:
 
 ```bash
 source /path/to/sandbox-docker/scripts/codex-worktrees.zsh
 ```
 
-Reload your shell:
+Reload the shell config you actually use:
 
 ```bash
-source ~/.bashrc
 source ~/.zshrc
+# or
+source ~/.bashrc
 ```
 
-Notes:
-
-- For Bash, use `~/.bashrc` (or `~/.bash_profile` on macOS if that is what your shell reads).
-- For Zsh, use `~/.zshrc`.
-
-Optional: copy the default rules template:
+Optional setup:
 
 ```bash
 mkdir -p ~/.codex/rules
 cp /path/to/sandbox-docker/default.example.rules ~/.codex/rules/default.rules
 ```
 
-Optional: integrate the example config into your local Codex config:
-
 ```bash
 mkdir -p ~/.codex
 cat /path/to/sandbox-docker/config.example.toml >> ~/.codex/config.toml
 ```
 
-## Use `cxhere`, `cxclose`, `cxkill`, and `cxlist`
+## Commands
 
-Start a Codex session in a dedicated git worktree + branch:
+| Command | What it does |
+| --- | --- |
+| `cxhere <worktree-name>` | Create or reuse a dedicated git worktree and launch Codex there. |
+| `cxhere <worktree-name> <session-id>` | Reuse the worktree and resume an existing Codex chat. |
+| `cxclose <worktree-name>` | Remove a clean worktree and delete its branch. |
+| `cxkill <worktree-name>` | Stop running container session(s) for that worktree without removing the worktree. |
+| `cxlist` | List managed Codex worktrees and show whether each one is `ok`, `locked`, or `prunable`. |
+
+Typical usage:
 
 ```bash
 cxhere mpm/my-feature
-```
-
-Resume a Codex chat by passing the session ID as the second argument:
-
-```bash
-cxhere mpm/my-feature <session-id>
-```
-
-Skip Docker and run the local `codex` CLI (still uses worktrees):
-
-```bash
+CXHERE_RUNTIME=container cxhere mpm/my-feature
+CXHERE_RUNTIME=docker cxhere mpm/my-feature
+CXHERE_RUNTIME=local cxhere mpm/my-feature
 CXHERE_NO_DOCKER=1 cxhere mpm/my-feature
 ```
 
-By default `cxhere` mounts your GitHub CLI config from `~/.config/gh` so `gh` can push and open PRs. In Docker mode it also forwards a GitHub token from host `GH_TOKEN`/`GITHUB_TOKEN`, or falls back to `gh auth token`, so macOS keychain-backed `gh` auth works inside the container without copying credentials into the worktree.
-Disable it with:
+With shell completion enabled, `cxhere`, `cxclose`, and `cxkill` autocomplete known Codex worktree branch names.
+
+## Session Flags
+
+### Runtime And Integration Flags
+
+| Variable | Default | Applies to | Effect |
+| --- | --- | --- | --- |
+| `CXHERE_RUNTIME` | `auto` | `cxhere`, `cxkill` | Selects `container`, `docker`, or `local`. `auto` prefers a ready Apple runtime, then a ready Docker daemon. |
+| `CXHERE_NO_DOCKER` | unset | `cxhere`, `cxkill` | Legacy alias for local-mode runtime selection. |
+| `CXHERE_GH` | `1` | Containerized sessions | Mounts `~/.config/gh`. Also forwards `GH_TOKEN`, `GITHUB_TOKEN`, or `gh auth token` when available. |
+| `GH_TOKEN` / `GITHUB_TOKEN` | unset | Containerized sessions | Preferred GitHub token source forwarded into the session before falling back to `gh auth token`. |
+| `CXHERE_SSH` | `1` | Containerized sessions | Mounts host `~/.ssh` read-only into the session. |
+| `CXHERE_SSH_AGENT` | `1` | Containerized sessions | Forwards `SSH_AUTH_SOCK` to `/tmp/ssh-agent.sock` when the host exposes a socket. |
+| `SSH_AUTH_SOCK` | host-dependent | Containerized sessions | Used as the source socket for agent forwarding when `CXHERE_SSH_AGENT=1`. |
+| `CXHERE_NGROK` | `1` | Containerized sessions | Mounts the detected host ngrok config into the session. |
+| `CXHERE_NGROK_CONFIG_DIR` | auto-detect | Containerized sessions | Overrides ngrok config discovery. Checked paths are `~/.config/ngrok`, `~/Library/Application Support/ngrok`, and `~/.ngrok2`. |
+
+### Runtime Tuning Flags
+
+| Variable | Default | Applies to | Effect |
+| --- | --- | --- | --- |
+| `CXHERE_CONTAINER_CPUS` | `4` | Apple `container` sessions | Sets the VM CPU allocation. |
+| `CXHERE_CONTAINER_MEMORY` | `4G` | Apple `container` sessions | Sets the VM memory allocation. |
+| `CXHERE_CONTAINER_XVFB_SCREEN` | `1280x720x24` | Apple `container` sessions | Default headed display size when `XVFB_SCREEN` is not set. |
+| `XVFB_SCREEN` | runtime-specific | Containerized sessions | Overrides the display size directly for one run. Docker defaults to `1920x1080x24`; Apple `container` defaults to `1280x720x24`. |
+| `CXHERE_PIDS_LIMIT` | `2048` | Docker sessions | Passed as Docker `--pids-limit`. |
+| `CXHERE_TMPFS_TMP_SIZE` | `2g` | Docker sessions | Size of the Docker `/tmp` tmpfs mount. |
+| `CXHERE_TMPFS_HOME_SIZE` | `2g` | Docker sessions | Size of the Docker `/home/codex` tmpfs mount. |
+| `CXHERE_SHM_SIZE` | `1g` | Docker sessions | Passed as Docker `--shm-size`. |
+| `CXHERE_ULIMIT_NPROC` | `8192` | Docker sessions | Passed as Docker `--ulimit nproc`. |
+| `CXHERE_ULIMIT_NOFILE` | `1048576` | Docker sessions | Passed as Docker `--ulimit nofile`. |
+
+### Display And Capture Flags
+
+| Variable | Default | Applies to | Effect |
+| --- | --- | --- | --- |
+| `HARNESS_CAPTURE_WITH_FFMPEG` | `1` | Containerized sessions | Keeps ffmpeg capture enabled by default. |
+| `HARNESS_CAPTURE_AUDIO_FORMAT` | `pulse` | Containerized sessions | Keeps PulseAudio as the default audio capture source. |
+| `CODEX_DISABLE_PULSEAUDIO` | unset | Session entrypoint | Skips internal PulseAudio startup. |
+| `CODEX_DISABLE_XVFB` | unset | Session entrypoint | Skips internal Xvfb startup. |
+
+## How Sessions Behave
+
+- Worktrees live next to the repo in a sibling directory named `<repo-name>-worktrees/<worktree-name>`, with `/` replaced by `__` in the directory name.
+- `cxhere` reuses an existing branch if the branch already exists and no worktree exists for it.
+- If a worktree already exists, `cxhere` looks for a running session for that worktree in the selected runtime. New sessions are discovered by stable labels; Docker also falls back to bind-mount discovery so older unlabeled sessions are still found.
+- If exactly one session already exists on the current `codex-cli:local` image, `cxhere` exits cleanly instead of starting a duplicate session.
+- If exactly one session exists on an older `codex-cli:local` image, `cxhere` replaces it so the worktree picks up the rebuilt image.
+- If the same worktree is already running in the other runtime, `cxhere` stops and tells you to either reuse that runtime or run `cxkill`.
+- If you explicitly request a runtime and it is unavailable, the command exits with that runtime's error instead of silently switching.
+- `cxkill` stops sessions for one worktree without deleting the worktree. With `CXHERE_RUNTIME=auto`, it checks all ready runtimes.
+- `cxclose` refuses to remove a locked worktree, a dirty worktree, or a worktree with Git lock files still present.
+
+## Files, Mounts, And Prompts
+
+- Containerized sessions mount the worktree at `/workspace`.
+- Containerized sessions also mount the main repo path read-only and `<repo>/.git` read-write so git worktree metadata still works.
+- `~/.gitconfig` and `~/.codex` are mounted into containerized sessions by default.
+- Root-level `.env*` files from the main repo are copied into the worktree when it is created. If present, `.env.cx.local` is passed to the session as an env file.
+- `cxhere` offers to create `docs/PLANS.md` from the project template when it is missing.
+- `cxhere` offers to create `$CODEX_HOME/AGENTS.md` from the global template when it is missing.
+- `cxhere` ensures your Codex config has a trusted `/workspace` project entry and prompts before writing it.
+- If `.pw-browsers` is under `/workspace`, `cxhere` offers to add it to the repo `.gitignore`.
+- On Docker runs, `cxhere` may also offer to copy `seccomp_profile.example.json` to `seccomp_profile.json` and add it to the repo `.gitignore`.
+
+## Image Contents
+
+- Base image: `ubuntu:25.10`
+- Node.js: `25.8.1`
+- Included tooling: Playwright Linux dependencies, `xvfb`, PulseAudio, `ffmpeg`, `ngrok`, and R
+- Browser cache path: `PLAYWRIGHT_BROWSERS_PATH=/workspace/.pw-browsers`
+- Entry point behavior: starts PulseAudio with a null sink, exposes the monitor source for ffmpeg audio capture, starts Xvfb, then execs `codex`
+
+Install browsers per project when needed:
 
 ```bash
-CXHERE_GH=0 cxhere mpm/my-feature
+npx playwright install chromium
 ```
 
-By default `cxhere` also mounts your host `~/.ssh` into Docker sessions as read-only at the container's effective home, and forwards `SSH_AUTH_SOCK` when present so Git-over-SSH works with agent-backed keys. Disable either behavior with:
-
-```bash
-CXHERE_SSH=0 cxhere mpm/my-feature
-CXHERE_SSH_AGENT=0 cxhere mpm/my-feature
-```
-
-By default `cxhere` also looks for an existing host ngrok config and mounts it into Docker sessions under `/tmp/ngrok-home` so `ngrok` reuses your saved authtoken and tunnel config. Disable or override that detection with:
-
-```bash
-CXHERE_NGROK=0 cxhere mpm/my-feature
-CXHERE_NGROK_CONFIG_DIR="$HOME/Library/Application Support/ngrok" cxhere mpm/my-feature
-```
-
-Cleanup when you're done:
-
-```bash
-cxclose mpm/my-feature
-```
-
-Stop Docker containers for an existing worktree without removing the worktree:
-
-```bash
-cxkill mpm/my-feature
-```
-
-List active Codex worktrees and flag anything prunable/stale:
-
-```bash
-cxlist
-```
-
-In shells with completion enabled, `cxhere`, `cxclose`, and `cxkill` autocomplete existing Codex worktree branch names.
-
-## Implementation and behavior notes
-
-`cxhere` runs Codex in a dedicated git worktree and branch. You pass a worktree name, which is also used as the
-branch name. This keeps multiple Codex sessions isolated and lets you run them concurrently in the same repo.
-Slashes in the name are supported (for example `mpm/my-feature`) and are only sanitized for the worktree
-directory on disk. Worktrees are created next to the repo in a sibling directory named
-`<PROJECT-DIR-NAME>-worktrees/<WORKTREENAME>`.
-
-Example paths:
-
-```text
-/path/to/sandbox-docker
-/path/to/sandbox-docker-worktrees/mpm__my-feature
-```
-
-### Behavior notes:
-
-- If the branch already exists and no worktree exists for it, `cxhere` will reuse the branch and create a worktree.
-- If the target worktree directory exists on disk but is not registered with git, `cxhere` will stop and print guidance.
-- If a worktree already exists, `cxhere` checks for running containers with a bind mount to that worktree (Docker mode only):
-  - Exactly one container on the current `codex-cli:local` image: print a message and exit 0.
-  - Exactly one container on an older `codex-cli:local` image: stop it and launch a fresh container from the rebuilt image.
-  - More than one: print a message and exit non-zero.
-  - None: launch Docker with the existing worktree.
-- If `CXHERE_NO_DOCKER=1`, container checks are skipped and `codex` is run directly on the worktree.
-- After creating or reusing a worktree, `cxhere` checks for `docs/PLANS.md` and offers to create it from the project template if missing.
-- Before launching Docker, `cxhere` checks for `$CODEX_HOME/AGENTS.md` and offers to create it from the global template if missing.
-- In Docker mode, `cxhere` mounts the main repo at its original absolute path as read-only, and mounts only `<repo>/.git` read-write. This lets git worktree metadata function while preventing writes to the main non-worktree files.
-- In Docker mode, `cxhere` mounts host `~/.ssh` read-only into `/home/codex/.ssh` by default, and forwards `SSH_AUTH_SOCK` to `/tmp/ssh-agent.sock` when the host exposes an agent socket.
-- In Docker mode, `cxhere` mounts the first matching host ngrok config directory from `CXHERE_NGROK_CONFIG_DIR`, `~/.config/ngrok`, `~/Library/Application Support/ngrok`, or `~/.ngrok2` into `/tmp/ngrok-home/.config/ngrok`, and the image's `ngrok` wrapper uses that path as its default config file.
-- The Docker image includes `xvfb-run`, so Playwright can launch headless browsers via `xvfb-run` if needed.
-- The Docker image includes the `ngrok` CLI.
-- The Docker image now boots an internal PulseAudio server with a null sink, keeps its runtime/config state under `/tmp`, waits for it to become reachable, and exports `PULSE_SERVER`, `HARNESS_CAPTURE_WITH_FFMPEG=1`, and `HARNESS_CAPTURE_AUDIO_FORMAT=pulse` so ffmpeg-based Playwright screencasts can include browser audio by default.
-- If Docker is not running or the daemon is unreachable, `cxhere` will surface the Docker error output and exit non-zero.
+If you want the migration research and validation notes behind the current runtime behavior, see `docs/apple-container-migration.execplan.md`.
