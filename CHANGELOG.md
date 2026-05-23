@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- Added `.worktreeinclude` support so `cxhere` can copy matching gitignored, untracked files and directories into worktrees using Git's ignore-pattern semantics.
 - Documented the host-side Apple `container` networking failure mode in `README.md`, including checking `net.inet.ip.forwarding` when the guest cannot reach `ports.ubuntu.com`.
 - Kept the first Ubuntu apt bootstrap on plain HTTP long enough to install `ca-certificates`, then switch the image over to HTTPS mirrors for later package steps.
 - Added an Apple `container` build-network probe, so arm64 builds fail fast with a Docker fallback hint when the guest VM cannot reach the initial `ports.ubuntu.com` bootstrap path.

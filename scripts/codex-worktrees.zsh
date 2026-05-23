@@ -271,6 +271,151 @@ EOF
   fi
 }
 
+cx_copy_worktree_include_path() {
+  local repo_root worktree_dir rel_path rel_no_slash src_path dest_path dest_dir
+
+  repo_root="$1"
+  worktree_dir="$2"
+  rel_path="$3"
+  rel_no_slash="${rel_path%/}"
+  [ -n "$rel_no_slash" ] || return 0
+
+  src_path="$repo_root/$rel_no_slash"
+  dest_path="$worktree_dir/$rel_no_slash"
+  if [ -e "$dest_path" ] || [ -L "$dest_path" ]; then
+    return 0
+  fi
+
+  dest_dir="$(dirname "$dest_path")"
+  mkdir -p "$dest_dir" || return 1
+  if [ -d "$src_path" ] && [ ! -L "$src_path" ]; then
+    cp -Rp "$src_path" "$dest_path" || return 1
+    echo "copied included directory: $dest_path"
+  elif [ -e "$src_path" ] || [ -L "$src_path" ]; then
+    cp -pP "$src_path" "$dest_path" || return 1
+    echo "copied included file: $dest_path"
+  fi
+}
+
+cx_write_worktree_include_matches() {
+  local repo_root include_file output_file mode tmp_dir included_file ignored_file
+
+  repo_root="$1"
+  include_file="$2"
+  output_file="$3"
+  mode="$4"
+  tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/cxhere-worktreeinclude.XXXXXX")" || return 1
+  included_file="$tmp_dir/included"
+  ignored_file="$tmp_dir/ignored"
+
+  if [ "$mode" = "directory" ]; then
+    if ! git -C "$repo_root" ls-files --others --ignored --exclude-from="$include_file" --directory > "$included_file"; then
+      rm -rf "$tmp_dir"
+      return 1
+    fi
+    if ! git -C "$repo_root" ls-files --others --ignored --exclude-standard --directory > "$ignored_file"; then
+      rm -rf "$tmp_dir"
+      return 1
+    fi
+  else
+    if ! git -C "$repo_root" ls-files --others --ignored --exclude-from="$include_file" > "$included_file"; then
+      rm -rf "$tmp_dir"
+      return 1
+    fi
+    if ! git -C "$repo_root" ls-files --others --ignored --exclude-standard > "$ignored_file"; then
+      rm -rf "$tmp_dir"
+      return 1
+    fi
+  fi
+
+  awk 'NR == FNR { ignored[$0] = 1; next } ignored[$0]' "$ignored_file" "$included_file" > "$output_file"
+  rm -rf "$tmp_dir"
+}
+
+cx_copy_worktree_includes() {
+  local repo_root worktree_dir include_file tmp_dir directory_matches file_matches rel_path
+
+  repo_root="$1"
+  worktree_dir="$2"
+  include_file="$repo_root/.worktreeinclude"
+  [ -f "$include_file" ] || return 0
+
+  tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/cxhere-worktreeinclude-copy.XXXXXX")" || return 1
+  directory_matches="$tmp_dir/directories"
+  file_matches="$tmp_dir/files"
+  if ! cx_write_worktree_include_matches "$repo_root" "$include_file" "$directory_matches" directory; then
+    rm -rf "$tmp_dir"
+    return 1
+  fi
+  if ! cx_write_worktree_include_matches "$repo_root" "$include_file" "$file_matches" file; then
+    rm -rf "$tmp_dir"
+    return 1
+  fi
+
+  while IFS= read -r rel_path; do
+    [ -n "$rel_path" ] || continue
+    case "$rel_path" in
+      */) cx_copy_worktree_include_path "$repo_root" "$worktree_dir" "$rel_path" || {
+        rm -rf "$tmp_dir"
+        return 1
+      } ;;
+    esac
+  done < "$directory_matches"
+
+  while IFS= read -r rel_path; do
+    [ -n "$rel_path" ] || continue
+    cx_copy_worktree_include_path "$repo_root" "$worktree_dir" "$rel_path" || {
+      rm -rf "$tmp_dir"
+      return 1
+    }
+  done < "$file_matches"
+
+  rm -rf "$tmp_dir"
+}
+
+cx_copy_legacy_worktree_env_files() {
+  local repo_root worktree_dir env_source env_target env_name
+  local -a env_sources
+
+  repo_root="$1"
+  worktree_dir="$2"
+
+  if [ -n "${ZSH_VERSION-}" ]; then
+    setopt local_options null_glob
+  elif [ -n "${BASH_VERSION-}" ]; then
+    local _nullglob_restore
+    if shopt -q nullglob; then
+      _nullglob_restore='shopt -s nullglob'
+    else
+      _nullglob_restore='shopt -u nullglob'
+    fi
+    shopt -s nullglob
+  fi
+
+  env_sources=("$repo_root"/.env*)
+  if (( ${#env_sources[@]} )); then
+    for env_source in "${env_sources[@]}"; do
+      env_name="$(basename "$env_source")"
+      env_target="$worktree_dir/$env_name"
+      if [ -f "$env_source" ]; then
+        if [ ! -e "$env_target" ]; then
+          cp "$env_source" "$env_target"
+          echo "copied env file: $env_target"
+        fi
+      elif [ -d "$env_source" ] && [ "$env_name" = ".env" ]; then
+        if [ ! -e "$env_target" ]; then
+          cp -R "$env_source" "$env_target"
+          echo "copied env directory: $env_target"
+        fi
+      fi
+    done
+  fi
+
+  if [ -n "${BASH_VERSION-}" ] && [ -n "${_nullglob_restore-}" ]; then
+    eval "$_nullglob_restore"
+  fi
+}
+
 cxhere_usage() {
   echo "usage: cxhere [-p port[:container-port][/protocol]]... [--dns-search name]... [--] <worktree-name> [session-id]" >&2
   echo "  -p, --port         bind a localhost port from the containerized session (for example: -p 5173 or -p 5173:5713)" >&2
@@ -370,7 +515,6 @@ cxhere() {
   local plans_url plans_path create_plans
   local agents_url agents_path create_agents
   local env_file create_env_file
-  local -a env_sources
   local gitignore_path create_gitignore add_env_ignore
   local repo_gitignore_path
   local playwright_browsers_path
@@ -776,36 +920,10 @@ cxhere() {
     fi
   fi
 
-  if [ -n "${ZSH_VERSION-}" ]; then
-    setopt local_options null_glob
-  elif [ -n "${BASH_VERSION-}" ]; then
-    local _nullglob_restore
-    if shopt -q nullglob; then
-      _nullglob_restore='shopt -s nullglob'
-    else
-      _nullglob_restore='shopt -u nullglob'
-    fi
-    shopt -s nullglob
-  fi
-  local -a env_sources
-  env_sources=("$repo_root"/.env*)
-  if (( ${#env_sources[@]} )); then
-    local env_source env_target env_name
-    for env_source in "${env_sources[@]}"; do
-      env_name="$(basename "$env_source")"
-      env_target="$worktree_dir/$env_name"
-      if [ -f "$env_source" ]; then
-        if [ ! -e "$env_target" ]; then
-          cp "$env_source" "$env_target"
-          echo "copied env file: $env_target"
-        fi
-      elif [ -d "$env_source" ] && [ "$env_name" = ".env" ]; then
-        if [ ! -e "$env_target" ]; then
-          cp -R "$env_source" "$env_target"
-          echo "copied env directory: $env_target"
-        fi
-      fi
-    done
+  if [ -f "$repo_root/.worktreeinclude" ]; then
+    cx_copy_worktree_includes "$repo_root" "$worktree_dir" || return 1
+  else
+    cx_copy_legacy_worktree_env_files "$repo_root" "$worktree_dir" || return 1
   fi
 
   if [ ! -f "$env_file" ]; then
@@ -832,10 +950,6 @@ cxhere() {
       printf "%s\n" ".env*" >> "$gitignore_path"
       echo "added .env* to $gitignore_path"
     fi
-  fi
-
-  if [ -n "${BASH_VERSION-}" ] && [ -n "${_nullglob_restore-}" ]; then
-    eval "$_nullglob_restore"
   fi
 
   codex_ensure_workspace_trust

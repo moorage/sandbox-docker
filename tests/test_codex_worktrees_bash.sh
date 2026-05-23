@@ -356,3 +356,87 @@ EOF
 fi
 
 echo "cxhere copies root env files and directories into new worktrees"
+
+if ! bash -lc '
+  set -euo pipefail
+  repo_root="'"$repo_root"'"
+  tmpdir="$(mktemp -d)"
+  trap '\''rm -rf "$tmpdir"'\'' EXIT
+
+  export HOME="$tmpdir/home"
+  mkdir -p "$HOME/.codex" "$tmpdir/bin"
+  PATH="$tmpdir/bin:$PATH"
+  export PATH
+
+  printf "%s\n" "#!/usr/bin/env bash" "exit 0" > "$tmpdir/bin/codex"
+  chmod +x "$tmpdir/bin/codex"
+
+  printf "%s\n" "# test" > "$HOME/.codex/AGENTS.md"
+  printf "%s\n" "[projects.\"/workspace\"]" "trust_level = \"trusted\"" > "$HOME/.codex/config.toml"
+
+  source "$repo_root/scripts/codex-worktrees.zsh"
+  cx_command_prelude() { :; }
+
+  git init "$tmpdir/repo" >/dev/null
+  git -C "$tmpdir/repo" config user.name "Test User"
+  git -C "$tmpdir/repo" config user.email "test@example.com"
+  mkdir -p "$tmpdir/repo/docs"
+  printf "seed\n" > "$tmpdir/repo/README.md"
+  printf "plan\n" > "$tmpdir/repo/docs/PLANS.md"
+  git -C "$tmpdir/repo" add README.md docs/PLANS.md
+  git -C "$tmpdir/repo" commit -m init >/dev/null
+
+  printf "%s\n" ".pw-browsers" ".env*" "config/secrets.json" "private/" "logs/" "cache/" "*.tmp" "README.md" > "$tmpdir/repo/.gitignore"
+  printf "%s\n" ".env.cx.local" "/config/secrets.json" "private/" "logs/**/*.log" "cache/" "*.tmp" "!keep.tmp" "included-not-ignored.txt" "README.md" > "$tmpdir/repo/.worktreeinclude"
+  git -C "$tmpdir/repo" add .gitignore .worktreeinclude
+  git -C "$tmpdir/repo" commit -m include-rules >/dev/null
+
+  mkdir -p "$tmpdir/repo/config" "$tmpdir/repo/private/nested" "$tmpdir/repo/logs/nested" "$tmpdir/repo/cache/empty"
+  printf "PORT=5173\n" > "$tmpdir/repo/.env.cx.local"
+  printf "UNLISTED=1\n" > "$tmpdir/repo/.env.unlisted"
+  printf "secret\n" > "$tmpdir/repo/config/secrets.json"
+  printf "token\n" > "$tmpdir/repo/private/nested/token.txt"
+  printf "log\n" > "$tmpdir/repo/logs/nested/app.log"
+  printf "skip\n" > "$tmpdir/repo/logs/nested/skip.txt"
+  printf "copy\n" > "$tmpdir/repo/copy.tmp"
+  printf "keep\n" > "$tmpdir/repo/keep.tmp"
+  printf "plain\n" > "$tmpdir/repo/included-not-ignored.txt"
+  printf "modified\n" > "$tmpdir/repo/README.md"
+
+  output="$(cd "$tmpdir/repo" && CXHERE_RUNTIME=local cxhere include-copy 2>&1)"
+  if ! printf "%s\n" "$output" | rg -F "worktree directory:" >/dev/null; then
+    echo "expected local cxhere invocation to complete for .worktreeinclude copy coverage" >&2
+    exit 1
+  fi
+
+  worktree_dir="$tmpdir/repo-worktrees/include-copy"
+  if [ ! -f "$worktree_dir/.env.cx.local" ] || [ ! -f "$worktree_dir/config/secrets.json" ]; then
+    echo "expected cxhere to copy .worktreeinclude file matches that are also gitignored" >&2
+    exit 1
+  fi
+  if [ ! -f "$worktree_dir/private/nested/token.txt" ] || [ ! -f "$worktree_dir/logs/nested/app.log" ]; then
+    echo "expected cxhere to recursively copy included ignored directory contents and glob matches" >&2
+    exit 1
+  fi
+  if [ ! -d "$worktree_dir/cache/empty" ]; then
+    echo "expected cxhere to recursively copy included ignored directories, including empty children" >&2
+    exit 1
+  fi
+  if [ ! -f "$worktree_dir/copy.tmp" ] || [ -e "$worktree_dir/keep.tmp" ]; then
+    echo "expected cxhere to honor .gitignore-style negation in .worktreeinclude" >&2
+    exit 1
+  fi
+  if [ -e "$worktree_dir/.env.unlisted" ] || [ -e "$worktree_dir/included-not-ignored.txt" ] || [ -e "$worktree_dir/logs/nested/skip.txt" ]; then
+    echo "expected cxhere to copy only paths matched by .worktreeinclude and standard gitignore rules" >&2
+    exit 1
+  fi
+  if [ "$(cat "$worktree_dir/README.md")" != "seed" ]; then
+    echo "expected cxhere not to copy tracked files matched by .worktreeinclude" >&2
+    exit 1
+  fi
+'; then
+  echo "expected cxhere to copy .worktreeinclude matches with gitignore semantics" >&2
+  exit 1
+fi
+
+echo "cxhere copies .worktreeinclude matches with gitignore semantics"
